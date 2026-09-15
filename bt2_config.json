@@ -8,5 +8,6 @@
   "backup_schedule": "Custom",
   "custom_time": "5",
   "exclude_patterns": "~$",
-  "log_to_file": true
+  "log_to_file": true,
+  "auto_start_backup": true
 }
