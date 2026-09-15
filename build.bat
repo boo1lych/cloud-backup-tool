@@ -80,9 +80,8 @@ echo %YELLOW%⚠️  Внимание: %CONFIG_FILE% не найден — пр�
 
 set "ICON_EXISTS=0"
 if exist "backup.ico" set "ICON_EXISTS=1"
-if exist "backup.png" set "ICON_EXISTS=1"
 if "%ICON_EXISTS%"=="0" (
-echo %YELLOW%⚠️  Внимание: backup.ico или backup.png не найдены — иконка не будет вшита%RESET%
+echo %YELLOW%⚠️  Внимание: backup.ico не найден — иконка не будет вшита%RESET%
 )
 
 echo %GREEN%✅ Все проверки пройдены%RESET%
@@ -125,14 +124,10 @@ copy /Y "%CONFIG_FILE%" "%OUTPUT_DIR%\" >nul
 echo   ✅ %CONFIG_FILE%
 )
 
-:: Копируем иконки (опционально)
+:: Копируем иконку (опционально)
 if exist "backup.ico" (
 copy /Y "backup.ico" "%OUTPUT_DIR%\" >nul
 echo   ✅ backup.ico
-)
-if exist "backup.png" (
-copy /Y "backup.png" "%OUTPUT_DIR%\" >nul
-echo   ✅ backup.png
 )
 
 set EXE_PATH=%OUTPUT_DIR%\%PROJECT_NAME%.exe

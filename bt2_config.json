@@ -1,13 +1,34 @@
 {
-  "source_dirs": [
-    "C:/Users/aantonov/Documents/aantonov-documents"
-  ],
-  "backup_dir": "O:/",
-  "skip_links": true,
+ "global": {
+  "autorun": false,
   "start_minimized": false,
-  "backup_schedule": "Custom",
-  "custom_time": "5",
-  "exclude_patterns": "~$",
   "log_to_file": true,
-  "auto_start_backup": true
+  "active_profile": "Default"
+ },
+ "profiles": {
+  "Default": {
+   "source_dirs": [
+    "C:/Users/aantonov/Documents/aantonov-documents"
+   ],
+   "backup_dir": "O:/",
+   "skip_links": true,
+   "backup_schedule": "Custom",
+   "custom_time": "1",
+   "exclude_patterns": "~$",
+   "auto_start_backup": true,
+   "enabled": true
+  },
+  "Outlook": {
+   "source_dirs": [
+    "C:/Users/aantonov/Documents/Файлы Outlook"
+   ],
+   "backup_dir": "O:/",
+   "skip_links": true,
+   "backup_schedule": "Daily 23:00",
+   "custom_time": "",
+   "exclude_patterns": "~, *.tmp",
+   "enabled": true,
+   "auto_start_backup": false
+  }
+ }
 }
