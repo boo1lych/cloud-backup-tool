@@ -11,11 +11,17 @@ import time
 import schedule
 import logging
 from logging.handlers import RotatingFileHandler
+import sys
+import fnmatch
 
-CONFIG_FILE = "bt2_config.json"
+# Базовая директория: для .exe — рядом с exe, для скрипта — рядом с .py
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Папка и файл для логов (относительно директории скрипта)
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+CONFIG_FILE = os.path.join(BASE_DIR, "bt2_config.json")
+LOG_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "backup.log")
 
 def is_reparse_point(path):
@@ -90,6 +96,14 @@ class BackupApp:
                 self.hide_window()
             else:
                 self.root.deiconify()
+
+    def update_tray_menu(self):
+        """Пересоздаёт меню трея при изменении настроек."""
+        if hasattr(self, "tray_icon") and self.tray_icon:
+            try:
+                self.tray_icon.update_menu()
+            except Exception:
+                pass
 
     def create_widgets(self):
         # Список исходных папок
@@ -348,10 +362,21 @@ class BackupApp:
         files_copied = 0
         files_skipped = 0
         total_size = 0
+        errors = 0
         copied_files = []
         exclude_patterns = [p.strip() for p in self.settings.get("exclude_patterns", "").split(",") if p.strip()]
         # Имя подпапки для этого источника
-        src_folder_name = os.path.basename(os.path.normpath(source_dir))
+        src_base = os.path.basename(os.path.normpath(source_dir))
+        same_name_sources = [
+            d for d in self.settings["source_dirs"]
+            if os.path.basename(os.path.normpath(d)) == src_base
+        ]
+        if len(same_name_sources) > 1:
+            src_folder_name = os.path.normpath(source_dir)
+            for ch in '<>:"/\\|?*':
+                src_folder_name = src_folder_name.replace(ch, "_")
+        else:
+            src_folder_name = src_base
         dest_root = os.path.join(backup_dir, src_folder_name)
         os.makedirs(dest_root, exist_ok=True)
         for root, dirs, files in os.walk(source_dir, topdown=True):
@@ -363,7 +388,10 @@ class BackupApp:
             os.makedirs(dest_path, exist_ok=True)
             for file in files:
                 # Пропуск по маске
-                if any(pattern in file for pattern in exclude_patterns):
+                if any(
+                    pattern in file or fnmatch.fnmatch(file, pattern)
+                    for pattern in exclude_patterns
+                ):
                     files_skipped += 1
                     self.update_log(f"Skipped (excluded by pattern): {os.path.join(root, file)}")
                     continue
@@ -372,6 +400,7 @@ class BackupApp:
                         "files_copied": files_copied,
                         "files_skipped": files_skipped,
                         "total_size_mb": total_size / 1024 / 1024,
+                        "errors": errors,
                         "copied_files": copied_files
                     }
                 src_file = os.path.join(root, file)
@@ -399,6 +428,7 @@ class BackupApp:
                         copied_files.append(src_file)
                         self.update_log(f"Copied: {src_file}")
                     except Exception as e:
+                        errors += 1
                         self.update_log(f"Error copying {src_file}: {str(e)}")
                 else:
                     files_skipped += 1
@@ -407,6 +437,7 @@ class BackupApp:
             "files_copied": files_copied,
             "files_skipped": files_skipped,
             "total_size_mb": total_size / 1024 / 1024,
+            "errors": errors,
             "copied_files": copied_files
         }
 
@@ -459,7 +490,7 @@ class BackupApp:
         self.settings["backup_schedule"] = value
         self.save_config()
         self.setup_schedule()
-        self.update_tray_menu()  # <--- добавьте этот вызов
+        self.update_tray_menu()  
 
     def setup_schedule(self):
         self.sched_stop.set()
@@ -497,8 +528,12 @@ class BackupApp:
             time.sleep(1)
 
     def scheduled_backup(self):
+        self.root.after(0, self._try_start_scheduled_backup)
+
+    def _try_start_scheduled_backup(self):
+        """Проверка состояния и запуск бэкапа уже в главном потоке."""
         if self.backup_button["state"] == tk.NORMAL:
-            self.root.after(0, self.start_backup)
+            self.start_backup()
 
     def save_config(self):
         self.settings["backup_dir"] = self.backup_entry.get()
