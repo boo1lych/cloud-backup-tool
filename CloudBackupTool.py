@@ -14,6 +14,9 @@ from logging.handlers import RotatingFileHandler
 import sys
 import fnmatch
 
+
+MAX_COPIED_LIST = 10000  # максимум путей, хранимых в памяти для UI
+
 # Базовая директория: для .exe — рядом с exe, для скрипта — рядом с .py
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -85,6 +88,7 @@ class BackupApp:
 
             self.sched_stop = threading.Event()
             self.sched_thread = None
+            self.schedule_lock = threading.Lock()
             self.create_widgets()
             self.create_tray_icon()
 
@@ -284,6 +288,17 @@ class BackupApp:
         if not os.path.exists(self.settings["backup_dir"]):
             messagebox.showerror("Error", "Backup directory is not accessible.")
             return
+        # Проверка свободного места (порог 1 ГБ)
+        MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024
+        free_bytes = self._get_free_space(self.settings["backup_dir"])
+        if free_bytes is not None and free_bytes < MIN_FREE_BYTES:
+            free_gb = free_bytes / (1024 ** 3)
+            if not messagebox.askyesno(
+                "Мало места",
+                f"На целевом диске осталось только {free_gb:.2f} ГБ.\n"
+                f"Продолжить создание резервной копии?"
+            ):
+                return
         self.save_config()
         self.stop_backup_flag = False
         self.backup_button.config(state=tk.DISABLED)
@@ -309,7 +324,11 @@ class BackupApp:
                 stats = self.backup_saves(source_dir, self.settings["backup_dir"])
                 for key in total_stats:
                     total_stats[key] += stats.get(key, 0)
-                all_copied_files.extend(stats.get("copied_files", []))    
+                new_files = stats.get("copied_files", [])
+                if len(all_copied_files) < MAX_COPIED_LIST:
+                    room = MAX_COPIED_LIST - len(all_copied_files)
+                    all_copied_files.extend(new_files[:room])
+                total_stats["total_copied_count"] = total_stats.get("total_copied_count", 0) + len(new_files)
             elapsed_time = time.time() - start_time
             speed = total_stats["total_size_mb"] / elapsed_time if elapsed_time > 0 else 0
             if self.stop_backup_flag:
@@ -324,10 +343,13 @@ class BackupApp:
                 self.update_log(msg)
 
                 # Итоговая сводка по скопированным файлам
+                total_count = total_stats.get("total_copied_count", total_stats['files_copied'])
                 if all_copied_files:
-                    summary = f"\n=== Скопированные файлы ({len(all_copied_files)} шт) ===\n"
+                    summary = f"\n=== Скопированные файлы ({total_count} шт) ===\n"
                     for f in all_copied_files:
                         summary += f"• {f}\n"
+                    if total_count > len(all_copied_files):
+                        summary += f"… и ещё {total_count - len(all_copied_files)} файлов (список обрезан для экономии памяти)\n"
                     self.update_log(summary)
                 else:
                     self.update_log("\n=== Скопированные файлы: нет (все файлы актуальны) ===\n")
@@ -379,7 +401,11 @@ class BackupApp:
             src_folder_name = src_base
         dest_root = os.path.join(backup_dir, src_folder_name)
         os.makedirs(dest_root, exist_ok=True)
-        for root, dirs, files in os.walk(source_dir, topdown=True):
+        def walk_error(err):
+            self.update_log(f"Error accessing path: {err}")
+
+        for root, dirs, files in os.walk(source_dir, topdown=True, onerror=walk_error):        
+
             # Пропускать линки, если включено
             if self.settings.get("skip_links", True):
                 dirs[:] = [d for d in dirs if not is_reparse_point(os.path.join(root, d))]
@@ -497,34 +523,46 @@ class BackupApp:
         if self.sched_thread and self.sched_thread.is_alive():
             self.sched_thread.join()
         self.sched_stop.clear()
-        schedule.clear()
+        with self.schedule_lock:
+            schedule.clear()
         sched = self.settings.get("backup_schedule", "None")
         if sched == "None":
             self.update_log("Расписание: отключено")
             return
-        elif sched.startswith("Daily"):
-            time_str = sched.split()[1]
-            schedule.every().day.at(time_str).do(self.scheduled_backup)
-            self.update_log(f"Расписание установлено: ежедневно в {time_str}")
-
-        elif sched == "Custom":
-            custom = self.custom_time_entry.get()
-            if ":" in custom:
-                schedule.every().day.at(custom).do(self.scheduled_backup)
-                self.update_log(f"Расписание установлено: ежедневно в {custom}")
-
-            elif custom.isdigit():
-                schedule.every(int(custom)).minutes.do(self.scheduled_backup)
-                self.update_log(f"Расписание установлено: каждые {custom} минут")
-            else:
-                self.update_log(f"Ошибка: некорректное значение custom_time: '{custom}'")
-                return
+        with self.schedule_lock:
+            if sched.startswith("Daily"):
+                time_str = sched.split()[1]
+                schedule.every().day.at(time_str).do(self.scheduled_backup)
+                self.update_log(f"Расписание установлено: ежедневно в {time_str}")
+            elif sched == "Custom":
+                custom = self.custom_time_entry.get()
+                if ":" in custom:
+                    # Валидация формата HH:MM
+                    parts = custom.split(":")
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        h, m = int(parts[0]), int(parts[1])
+                        if 0 <= h <= 23 and 0 <= m <= 59:
+                            schedule.every().day.at(custom).do(self.scheduled_backup)
+                            self.update_log(f"Расписание установлено: ежедневно в {custom}")
+                        else:
+                            self.update_log(f"Ошибка: время должно быть в диапазоне 00:00–23:59, получено '{custom}'")
+                            return
+                    else:
+                        self.update_log(f"Ошибка: некорректный формат времени '{custom}', ожидается ЧЧ:ММ")
+                        return
+                elif custom.isdigit():
+                    schedule.every(int(custom)).minutes.do(self.scheduled_backup)
+                    self.update_log(f"Расписание установлено: каждые {custom} минут")
+                else:
+                    self.update_log(f"Ошибка: некорректное значение custom_time: '{custom}'")
+                    return
         self.sched_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.sched_thread.start()
 
     def run_scheduler(self):
         while not self.sched_stop.is_set():
-            schedule.run_pending()
+            with self.schedule_lock:
+                schedule.run_pending()
             time.sleep(1)
 
     def scheduled_backup(self):
@@ -597,20 +635,21 @@ class BackupApp:
     def show_window(self, *args):
         self.root.after(0, self.root.deiconify)
 
-    def exit_app(self):
-        # Останавливаем иконку в трее
+    def exit_app(self, *args):
+        # Останавливаем планировщик — безопасно из любого потока
+        if hasattr(self, "sched_stop"):
+            self.sched_stop.set()
+        # tray_icon.stop() нельзя вызывать из потока pystray (deadlock),
+        # поэтому всю очистку делаем в главном Tkinter-потоке
+        self.root.after(0, self._shutdown)
+
+    def _shutdown(self):
         if hasattr(self, "tray_icon") and self.tray_icon:
             try:
                 self.tray_icon.stop()
             except Exception:
                 pass
-
-        # Останавливаем фоновый поток планировщика
-        if hasattr(self, "sched_stop"):
-            self.sched_stop.set()
-
-        # Безопасное уничтожение окна через after (один вызов)
-        self.root.after(0, self.root.destroy)
+        self.root.destroy()
 
     def toggle_autorun_from_tray(self, icon, item):
         if self.check_autorun():
@@ -627,6 +666,17 @@ class BackupApp:
         else:
             self.schedule_var.set("None")
         self.schedule_changed(self.schedule_var.get())
+
+    def _get_free_space(self, path):
+        """Возвращает свободное место в байтах на диске, где расположен path."""
+        try:
+            free_bytes = ctypes.c_ulonglong(0)
+            ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                ctypes.c_wchar_p(path), None, None, ctypes.pointer(free_bytes)
+            )
+            return free_bytes.value
+        except Exception:
+            return None        
 
 if __name__ == "__main__":
     root = tk.Tk()
