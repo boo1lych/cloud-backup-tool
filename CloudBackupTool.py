@@ -186,15 +186,18 @@ class BackupApp:
         self.custom_time_entry.bind("<FocusOut>", lambda e: self.on_custom_time_changed())
         self.custom_time_entry.bind("<Return>", lambda e: self.on_custom_time_changed())
         
-        self.custom_hint_label = ttk.Label(right_col, text="Examples: 21:30 or 120 (minutes)", foreground="gray")
-        self.custom_hint_label.grid(row=0, column=3, sticky=tk.W)
+        self.custom_hint_label = tk.Label(right_col, text="Примеры: 21:30 (ежедневно в 21:30), 120 (каждые 120 минут)", fg="gray")
+        self.custom_hint_label.grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
         self.custom_hint_label.grid_remove()
-        
-        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
+
+        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
         self.exclude_entry = ttk.Entry(right_col, width=40)
         self.exclude_entry.insert(0, self.settings.get("exclude_patterns", ""))
-        self.exclude_entry.grid(row=1, column=1, columnspan=3, sticky=tk.EW, pady=(10, 0))
-        
+        self.exclude_entry.grid(row=2, column=1, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        # Подсказка для поля исключений
+        self.exclude_hint_label = tk.Label(right_col, text="Маски: *$*.txt, ~$, *.tmp, logs/*", fg="gray")
+        self.exclude_hint_label.grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))        
+
         # === Секция 4: Control ===
         control_frame = ttk.LabelFrame(main_frame, text="Control", padding=10)
         control_frame.pack(fill=tk.X, pady=(0, 10))
@@ -404,7 +407,13 @@ class BackupApp:
         errors = 0
         copied_files = []
         exclude_patterns = [p.strip() for p in self.settings.get("exclude_patterns", "").split(",") if p.strip()]
-        # Имя подпапки для этого источника
+        # Нормализуем паттерны: если нет маски (* или ?), оборачиваем в *pattern* для поиска подстроки
+        normalized_patterns = []
+        for p in exclude_patterns:
+            if '*' in p or '?' in p:
+                normalized_patterns.append(p)
+            else:
+                normalized_patterns.append(f"*{p}*")        # Имя подпапки для этого источника
         src_base = os.path.basename(os.path.normpath(source_dir))
         same_name_sources = [
             d for d in self.settings["source_dirs"]
@@ -430,10 +439,11 @@ class BackupApp:
             dest_path = os.path.join(dest_root, rel_path) if rel_path != '.' else dest_root
             os.makedirs(dest_path, exist_ok=True)
             for file in files:
-                # Пропуск по маске
+                # Пропуск по маске (проверяем и имя файла, и относительный путь)
+                file_path = os.path.join(rel_path, file) if rel_path != '.' else file
                 if any(
-                    pattern in file or fnmatch.fnmatch(file, pattern)
-                    for pattern in exclude_patterns
+                    fnmatch.fnmatch(file, pattern) or fnmatch.fnmatch(file_path, pattern)
+                    for pattern in normalized_patterns
                 ):
                     files_skipped += 1
                     self.update_log(f"Skipped (excluded by pattern): {os.path.join(root, file)}")
@@ -545,7 +555,7 @@ class BackupApp:
         self.settings["backup_schedule"] = value
         self.save_config()
         self.setup_schedule()
-        self.update_tray_menu()  
+        self.update_tray_menu()
 
     def setup_schedule(self):
         self.sched_stop.set()
