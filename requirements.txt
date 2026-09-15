@@ -1,0 +1,4 @@
+schedule
+pystray
+Pillow
+pyinstaller
