@@ -122,7 +122,9 @@ class BackupApp:
         self.custom_time_entry.grid(row=6, column=2, sticky=tk.W)
         self.custom_time_entry.insert(0, self.settings.get("custom_time", ""))
         self.custom_time_entry.grid_remove()
-        self.custom_time_entry.bind("<FocusOut>", lambda e: self.save_config())        
+        # При изменении custom_time — сохраняем конфиг И пересоздаём расписание
+        self.custom_time_entry.bind("<FocusOut>", lambda e: self.on_custom_time_changed())
+        self.custom_time_entry.bind("<Return>", lambda e: self.on_custom_time_changed())
         self.custom_hint_label = tk.Label(dir_frame, text="Примеры: 21:30 (ежедневно в 21:30), 120 (каждые 120 минут)", fg="gray")
         self.custom_hint_label.grid(row=7, column=1, columnspan=2, sticky=tk.W)
         self.custom_hint_label.grid_remove()
@@ -173,6 +175,13 @@ class BackupApp:
         if self.schedule_var.get() == "Custom":
             self.custom_time_entry.grid()
             self.custom_hint_label.grid()
+    def on_custom_time_changed(self):
+        """Вызывается при изменении custom_time в виджете"""
+        self.save_config()
+        # Пересоздаём расписание с новым значением
+        if self.schedule_var.get() == "Custom":
+            self.setup_schedule()
+            self.update_log(f"Расписание обновлено: каждые {self.custom_time_entry.get()} минут")
 
     def toggle_start_minimized(self):
         self.settings["start_minimized"] = self.start_minimized_var.get()
@@ -207,16 +216,28 @@ class BackupApp:
     def update_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_line = f"[{timestamp}] {message}\n"
-        self.log_display.insert(tk.END, log_line)
-        self.log_display.see(tk.END)
+
+        # Безопасное обновление UI из фонового потока
+        self.root.after(0, self._insert_log_ui, log_line)
+
         # Сохранять лог в файл, если включено
-        if self.log_to_file_var.get():
+        if self.settings.get("log_to_file", False):
             try:
                 with open("backup.log", "a", encoding="utf-8") as f:
                     f.write(log_line)
             except Exception as e:
                 # Можно добавить вывод ошибки в лог, если не удалось записать
-                self.log_display.insert(tk.END, f"[{timestamp}] Ошибка записи лога в файл: {e}\n")
+                self.root.after(0, self._insert_log_ui,
+                                f"[{timestamp}] Ошибка записи лога в файл: {e}\n")
+
+    def _insert_log_ui(self, log_line):
+        """Вспомогательный метод для безопасной вставки текста в ScrolledText."""
+        try:
+            self.log_display.insert(tk.END, log_line)
+            self.log_display.see(tk.END)
+        except tk.TclError:
+            # Окно уже уничтожено — игнорируем
+            pass
 
     def update_status(self, message, color="blue"):
         self.status_label.config(text=message, fg=color)
@@ -430,16 +451,25 @@ class BackupApp:
         schedule.clear()
         sched = self.settings.get("backup_schedule", "None")
         if sched == "None":
+            self.update_log("Расписание: отключено")
             return
         elif sched.startswith("Daily"):
             time_str = sched.split()[1]
             schedule.every().day.at(time_str).do(self.scheduled_backup)
+            self.update_log(f"Расписание установлено: ежедневно в {time_str}")
+
         elif sched == "Custom":
             custom = self.custom_time_entry.get()
             if ":" in custom:
                 schedule.every().day.at(custom).do(self.scheduled_backup)
+                self.update_log(f"Расписание установлено: ежедневно в {custom}")
+
             elif custom.isdigit():
                 schedule.every(int(custom)).minutes.do(self.scheduled_backup)
+                self.update_log(f"Расписание установлено: каждые {custom} минут")
+            else:
+                self.update_log(f"Ошибка: некорректное значение custom_time: '{custom}'")
+                return
         self.sched_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.sched_thread.start()
 
@@ -515,9 +545,18 @@ class BackupApp:
         self.root.after(0, self.root.deiconify)
 
     def exit_app(self):
-        self.root.destroy()
-        if hasattr(self, "tray_icon"):
-            self.tray_icon.stop()
+        # Останавливаем иконку в трее
+        if hasattr(self, "tray_icon") and self.tray_icon:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+
+        # Останавливаем фоновый поток планировщика
+        if hasattr(self, "sched_stop"):
+            self.sched_stop.set()
+
+        # Безопасное уничтожение окна через after (один вызов)
         self.root.after(0, self.root.destroy)
 
     def toggle_autorun_from_tray(self, icon, item):
