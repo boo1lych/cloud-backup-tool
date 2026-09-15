@@ -9,8 +9,14 @@ import ctypes
 import winreg as reg
 import time
 import schedule
+import logging
+from logging.handlers import RotatingFileHandler
 
 CONFIG_FILE = "bt2_config.json"
+
+# Папка и файл для логов (относительно директории скрипта)
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+LOG_FILE = os.path.join(LOG_DIR, "backup.log")
 
 def is_reparse_point(path):
     try:
@@ -53,19 +59,37 @@ class BackupApp:
         self.stop_backup_flag = False
 
         self.load_config()
-        self.sched_stop = threading.Event()
-        self.sched_thread = None
-        self.create_widgets()
-        self.create_tray_icon()
 
-        # Обработчик закрытия окна
-        self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
-        self.setup_schedule()
-        # Если автозапуск и start_minimized - сразу в трей
-        if self.settings.get("start_minimized", False):
-            self.hide_window()
-        else:
-            self.root.deiconify()
+        # --- Настройка ротируемого логгера ---
+        os.makedirs(LOG_DIR, exist_ok=True)
+        self.logger = logging.getLogger("CloudBackupTool")
+        self.logger.setLevel(logging.INFO)
+        # Чтобы не дублировать handler при пересоздании объекта (на всякий случай)
+        if not self.logger.handlers:
+            rotating_handler = RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=10 * 1024 * 1024,   # 10 МБ
+                backupCount=5,               # 5 файлов в ротации
+                encoding="utf-8"
+            )
+            formatter = logging.Formatter("[%(asctime)s] %(message)s",
+                                            datefmt="%Y-%m-%d %H:%M:%S")
+            rotating_handler.setFormatter(formatter)
+            self.logger.addHandler(rotating_handler)
+
+            self.sched_stop = threading.Event()
+            self.sched_thread = None
+            self.create_widgets()
+            self.create_tray_icon()
+
+            # Обработчик закрытия окна
+            self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
+            self.setup_schedule()
+            # Если автозапуск и start_minimized - сразу в трей
+            if self.settings.get("start_minimized", False):
+                self.hide_window()
+            else:
+                self.root.deiconify()
 
     def create_widgets(self):
         # Список исходных папок
@@ -220,15 +244,9 @@ class BackupApp:
         # Безопасное обновление UI из фонового потока
         self.root.after(0, self._insert_log_ui, log_line)
 
-        # Сохранять лог в файл, если включено
+        # Запись в ротируемый файл через logging
         if self.settings.get("log_to_file", False):
-            try:
-                with open("backup.log", "a", encoding="utf-8") as f:
-                    f.write(log_line)
-            except Exception as e:
-                # Можно добавить вывод ошибки в лог, если не удалось записать
-                self.root.after(0, self._insert_log_ui,
-                                f"[{timestamp}] Ошибка записи лога в файл: {e}\n")
+            self.logger.info(message)
 
     def _insert_log_ui(self, log_line):
         """Вспомогательный метод для безопасной вставки текста в ScrolledText."""
