@@ -63,7 +63,8 @@ class BackupApp:
             "source_dirs": [],
             "backup_dir": "",
             "skip_links": True,
-            "start_minimized": False
+            "start_minimized": False,
+            "auto_start_backup": False
         }
         self.stop_backup_flag = False
 
@@ -100,6 +101,10 @@ class BackupApp:
                 self.hide_window()
             else:
                 self.root.deiconify()
+
+            # Автостарт копирования при запуске приложения
+            if self.settings.get("auto_start_backup", False):
+                self.root.after(500, self.start_backup)
 
     def update_tray_menu(self):
         """Пересоздаёт меню трея при изменении настроек."""
@@ -154,21 +159,24 @@ class BackupApp:
         self.start_minimized_var = tk.BooleanVar(value=self.settings.get("start_minimized", False))
         self.start_minimized_cb = tk.Checkbutton(dir_frame, text="Запускать свернутым", variable=self.start_minimized_var, command=self.toggle_start_minimized)
         self.start_minimized_cb.grid(row=5, column=0, sticky=tk.W)
-
+        # Чекбокс "Автостарт копирования при запуске"
+        self.auto_start_backup_var = tk.BooleanVar(value=self.settings.get("auto_start_backup", False))
+        self.auto_start_backup_cb = tk.Checkbutton(dir_frame, text="Автостарт копирования при запуске", variable=self.auto_start_backup_var, command=self.toggle_auto_start_backup)
+        self.auto_start_backup_cb.grid(row=6, column=0, sticky=tk.W)
         # Настройка расписания
-        tk.Label(dir_frame, text="Backup Schedule:").grid(row=6, column=0, sticky=tk.W)
+        tk.Label(dir_frame, text="Backup Schedule:").grid(row=7, column=0, sticky=tk.W)
         self.schedule_var = tk.StringVar(value=self.settings.get("backup_schedule", "None"))
         self.schedule_menu = tk.OptionMenu(dir_frame, self.schedule_var, "None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", command=self.schedule_changed)
-        self.schedule_menu.grid(row=6, column=1, sticky=tk.W)
+        self.schedule_menu.grid(row=7, column=1, sticky=tk.W)
         self.custom_time_entry = tk.Entry(dir_frame, width=10)
-        self.custom_time_entry.grid(row=6, column=2, sticky=tk.W)
+        self.custom_time_entry.grid(row=7, column=2, sticky=tk.W)
         self.custom_time_entry.insert(0, self.settings.get("custom_time", ""))
         self.custom_time_entry.grid_remove()
         # При изменении custom_time — сохраняем конфиг И пересоздаём расписание
         self.custom_time_entry.bind("<FocusOut>", lambda e: self.on_custom_time_changed())
         self.custom_time_entry.bind("<Return>", lambda e: self.on_custom_time_changed())
         self.custom_hint_label = tk.Label(dir_frame, text="Примеры: 21:30 (ежедневно в 21:30), 120 (каждые 120 минут)", fg="gray")
-        self.custom_hint_label.grid(row=7, column=1, columnspan=2, sticky=tk.W)
+        self.custom_hint_label.grid(row=7, column=3, sticky=tk.W)
         self.custom_hint_label.grid_remove()
 
         # Кнопки управления
@@ -208,11 +216,11 @@ class BackupApp:
         #self.log_to_file_cb.grid(row=2, column=2, sticky=tk.W)
 
         # Поле для масок исключения файлов/папок
-        tk.Label(dir_frame, text="Исключить (маски через запятую):").grid(row=8, column=0, sticky=tk.W)
+        tk.Label(dir_frame, text="Исключить (маски через запятую):").grid(row=9, column=0, sticky=tk.W)
         self.exclude_entry = tk.Entry(dir_frame, width=60)
         self.exclude_entry.insert(0, self.settings.get("exclude_patterns", ""))
-        self.exclude_entry.grid(row=8, column=1, padx=5, pady=5, columnspan=2, sticky=tk.W)
-
+        self.exclude_entry.grid(row=9, column=1, padx=5, pady=5, columnspan=2, sticky=tk.W)
+    
         # Если при загрузке конфига выбрано "Custom", показать поле ввода времени
         if self.schedule_var.get() == "Custom":
             self.custom_time_entry.grid()
@@ -274,6 +282,10 @@ class BackupApp:
         except tk.TclError:
             # Окно уже уничтожено — игнорируем
             pass
+
+    def toggle_auto_start_backup(self):
+        self.settings["auto_start_backup"] = self.auto_start_backup_var.get()
+        self.save_config()
 
     def update_status(self, message, color="blue"):
         self.status_label.config(text=message, fg=color)
@@ -580,6 +592,7 @@ class BackupApp:
         self.settings["start_minimized"] = self.start_minimized_var.get()
         self.settings["log_to_file"] = self.log_to_file_var.get()
         self.settings["exclude_patterns"] = self.exclude_entry.get()
+        self.settings["auto_start_backup"] = self.auto_start_backup_var.get()
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(self.settings, f, ensure_ascii=False, indent=2)
 
@@ -594,6 +607,8 @@ class BackupApp:
         if hasattr(self, "exclude_entry"):
             self.exclude_entry.delete(0, tk.END)
             self.exclude_entry.insert(0, self.settings.get("exclude_patterns", ""))
+        if hasattr(self, "auto_start_backup_var"):
+            self.auto_start_backup_var.set(self.settings.get("auto_start_backup", False))
 
     def create_tray_menu(self):
         return pystray.Menu(
