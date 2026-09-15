@@ -122,6 +122,7 @@ class BackupApp:
         self.custom_time_entry.grid(row=6, column=2, sticky=tk.W)
         self.custom_time_entry.insert(0, self.settings.get("custom_time", ""))
         self.custom_time_entry.grid_remove()
+        self.custom_time_entry.bind("<FocusOut>", lambda e: self.save_config())        
         self.custom_hint_label = tk.Label(dir_frame, text="Примеры: 21:30 (ежедневно в 21:30), 120 (каждые 120 минут)", fg="gray")
         self.custom_hint_label.grid(row=7, column=1, columnspan=2, sticky=tk.W)
         self.custom_hint_label.grid_remove()
@@ -167,6 +168,11 @@ class BackupApp:
         self.exclude_entry = tk.Entry(dir_frame, width=60)
         self.exclude_entry.insert(0, self.settings.get("exclude_patterns", ""))
         self.exclude_entry.grid(row=8, column=1, padx=5, pady=5, columnspan=2, sticky=tk.W)
+
+        # Если при загрузке конфига выбрано "Custom", показать поле ввода времени
+        if self.schedule_var.get() == "Custom":
+            self.custom_time_entry.grid()
+            self.custom_hint_label.grid()
 
     def toggle_start_minimized(self):
         self.settings["start_minimized"] = self.start_minimized_var.get()
@@ -225,6 +231,7 @@ class BackupApp:
         if not os.path.exists(self.settings["backup_dir"]):
             messagebox.showerror("Error", "Backup directory is not accessible.")
             return
+        self.save_config()
         self.stop_backup_flag = False
         self.backup_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
