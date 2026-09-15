@@ -5,6 +5,8 @@ config.json
 config_win.json
 # Рекомендуется хранить в репозитории только шаблон:
 # config.example.json
+Text Document.txt
+Converting a Python Script to an Executable.pdf
 
 # === База данных и состояние синхронизации ===
 sync_state.db
