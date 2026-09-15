@@ -1,7 +1,7 @@
 import os
 import shutil
 import tkinter as tk
-from tkinter import scrolledtext, filedialog, messagebox, simpledialog
+from tkinter import ttk, scrolledtext, filedialog, messagebox, simpledialog
 from datetime import datetime
 import threading
 import json
@@ -45,6 +45,7 @@ class BackupApp:
         self.root = root
         self.root.title("Cloud Backup Tool")
         self.root.geometry("1500x800")
+        self.root.minsize(800, 600)
         self.root.resizable(True, True)
 
         # --- Добавление иконки для главного окна ---
@@ -115,116 +116,120 @@ class BackupApp:
                 pass
 
     def create_widgets(self):
-        # Список исходных папок
-        source_frame = tk.Frame(self.root, padx=10, pady=10)
-        source_frame.pack(fill=tk.X, pady=5)
-
-        tk.Label(source_frame, text="Source Directories:").pack(anchor='w')
-        self.source_listbox = tk.Listbox(source_frame, selectmode=tk.EXTENDED, width=60)
-        self.source_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        # Главный контейнер с отступами
+        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # === Секция 1: Source Directories ===
+        source_frame = ttk.LabelFrame(main_frame, text="Source Directories", padding=10)
+        source_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.source_listbox = tk.Listbox(source_frame, selectmode=tk.EXTENDED, height=4, width=80)
+        self.source_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         for path in self.settings["source_dirs"]:
             self.source_listbox.insert(tk.END, path)
-
-        source_btns = tk.Frame(source_frame)
+        
+        source_btns = ttk.Frame(source_frame)
         source_btns.pack(side=tk.RIGHT, fill=tk.Y)
-        tk.Button(source_btns, text="Add...", command=self.add_source).pack(fill=tk.X)
-        tk.Button(source_btns, text="Remove", command=self.remove_source).pack(fill=tk.X)
-
-        # Целевая папка
-        dir_frame = tk.Frame(self.root, padx=10, pady=10)
-        dir_frame.pack(fill=tk.X, pady=5)
-
-        tk.Label(dir_frame, text="Backup Directory:").grid(row=0, column=0, sticky=tk.W)
-        self.backup_entry = tk.Entry(dir_frame, width=60)
+        ttk.Button(source_btns, text="Add...", command=self.add_source, width=12).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(source_btns, text="Remove", command=self.remove_source, width=12).pack(fill=tk.X)
+        
+        # === Секция 2: Backup Destination ===
+        dest_frame = ttk.LabelFrame(main_frame, text="Backup Destination", padding=10)
+        dest_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(dest_frame, text="Directory:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        self.backup_entry = ttk.Entry(dest_frame, width=60)
         self.backup_entry.insert(0, self.settings["backup_dir"])
-        self.backup_entry.grid(row=0, column=1, padx=5)
-        tk.Button(dir_frame, text="Browse...", command=self.browse_backup).grid(row=0, column=2)
-
-        # Чекбокс "Пропускать линки"
+        self.backup_entry.grid(row=0, column=1, padx=(0, 10), sticky=tk.EW)
+        ttk.Button(dest_frame, text="Browse...", command=self.browse_backup).grid(row=0, column=2)
+        dest_frame.columnconfigure(1, weight=1)
+        
+        # === Секция 3: Settings ===
+        settings_frame = ttk.LabelFrame(main_frame, text="Settings", padding=10)
+        settings_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Левая колонка
+        left_col = ttk.Frame(settings_frame)
+        left_col.grid(row=0, column=0, sticky=tk.NW, padx=(0, 20))
+        
         self.skip_links_var = tk.BooleanVar(value=self.settings.get("skip_links", True))
-        self.skip_links_cb = tk.Checkbutton(dir_frame, text="Skip symbolic links/junctions", variable=self.skip_links_var, command=self.toggle_skip_links)
-        self.skip_links_cb.grid(row=2, column=0, sticky=tk.W)
-
-        # Чекбокс "Сохранять лог в файл"
+        ttk.Checkbutton(left_col, text="Skip symbolic links/junctions", variable=self.skip_links_var, command=self.toggle_skip_links).pack(anchor=tk.W, pady=2)
+        
         self.log_to_file_var = tk.BooleanVar(value=self.settings.get("log_to_file", False))
-        self.log_to_file_cb = tk.Checkbutton(dir_frame, text="Сохранять лог в файл", variable=self.log_to_file_var)
-        self.log_to_file_cb.grid(row=3, column=0, sticky=tk.W)
-
-        # Чекбокс автозагрузки
+        ttk.Checkbutton(left_col, text="Save log to file", variable=self.log_to_file_var).pack(anchor=tk.W, pady=2)
+        
         self.autorun_var = tk.BooleanVar(value=self.check_autorun())
-        self.autorun_cb = tk.Checkbutton(dir_frame, text="Запускать при старте Windows", variable=self.autorun_var, command=self.toggle_autorun)
-        self.autorun_cb.grid(row=4, column=0, sticky=tk.W)
-
-        # Чекбокс "Запускать свернутым"
+        ttk.Checkbutton(left_col, text="Run at Windows startup", variable=self.autorun_var, command=self.toggle_autorun).pack(anchor=tk.W, pady=2)
+        
         self.start_minimized_var = tk.BooleanVar(value=self.settings.get("start_minimized", False))
-        self.start_minimized_cb = tk.Checkbutton(dir_frame, text="Запускать свернутым", variable=self.start_minimized_var, command=self.toggle_start_minimized)
-        self.start_minimized_cb.grid(row=5, column=0, sticky=tk.W)
-        # Чекбокс "Автостарт копирования при запуске"
+        ttk.Checkbutton(left_col, text="Start minimized", variable=self.start_minimized_var, command=self.toggle_start_minimized).pack(anchor=tk.W, pady=2)
+        
         self.auto_start_backup_var = tk.BooleanVar(value=self.settings.get("auto_start_backup", False))
-        self.auto_start_backup_cb = tk.Checkbutton(dir_frame, text="Автостарт копирования при запуске", variable=self.auto_start_backup_var, command=self.toggle_auto_start_backup)
-        self.auto_start_backup_cb.grid(row=6, column=0, sticky=tk.W)
-        # Настройка расписания
-        tk.Label(dir_frame, text="Backup Schedule:").grid(row=7, column=0, sticky=tk.W)
+        ttk.Checkbutton(left_col, text="Auto-start backup on launch", variable=self.auto_start_backup_var, command=self.toggle_auto_start_backup).pack(anchor=tk.W, pady=2)
+        
+        # Правая колонка
+        right_col = ttk.Frame(settings_frame)
+        right_col.grid(row=0, column=1, sticky=tk.NW)
+        
+        ttk.Label(right_col, text="Backup Schedule:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
         self.schedule_var = tk.StringVar(value=self.settings.get("backup_schedule", "None"))
-        self.schedule_menu = tk.OptionMenu(dir_frame, self.schedule_var, "None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", command=self.schedule_changed)
-        self.schedule_menu.grid(row=7, column=1, sticky=tk.W)
-        self.custom_time_entry = tk.Entry(dir_frame, width=10)
-        self.custom_time_entry.grid(row=7, column=2, sticky=tk.W)
+        self.schedule_menu = ttk.Combobox(right_col, textvariable=self.schedule_var, values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom"], state="readonly", width=15)
+        self.schedule_menu.grid(row=0, column=1, padx=(0, 10))
+        self.schedule_menu.bind("<<ComboboxSelected>>", lambda e: self.schedule_changed(self.schedule_var.get()))
+        
+        self.custom_time_entry = ttk.Entry(right_col, width=10)
+        self.custom_time_entry.grid(row=0, column=2, padx=(0, 10))
         self.custom_time_entry.insert(0, self.settings.get("custom_time", ""))
         self.custom_time_entry.grid_remove()
-        # При изменении custom_time — сохраняем конфиг И пересоздаём расписание
+        
         self.custom_time_entry.bind("<FocusOut>", lambda e: self.on_custom_time_changed())
         self.custom_time_entry.bind("<Return>", lambda e: self.on_custom_time_changed())
-        self.custom_hint_label = tk.Label(dir_frame, text="Примеры: 21:30 (ежедневно в 21:30), 120 (каждые 120 минут)", fg="gray")
-        self.custom_hint_label.grid(row=7, column=3, sticky=tk.W)
+        
+        self.custom_hint_label = ttk.Label(right_col, text="Examples: 21:30 or 120 (minutes)", foreground="gray")
+        self.custom_hint_label.grid(row=0, column=3, sticky=tk.W)
         self.custom_hint_label.grid_remove()
-
-        # Кнопки управления
-        btn_frame = tk.Frame(self.root, padx=10, pady=5)
-        btn_frame.pack(fill=tk.X)
-        self.backup_button = tk.Button(btn_frame, text="Start Backup", command=self.start_backup, bg="#4CAF50", fg="white", height=2, width=15)
-        self.backup_button.pack(side=tk.LEFT, padx=5)
-        self.stop_button = tk.Button(btn_frame, text="Stop", command=self.stop_backup, bg="#F44336", fg="white", height=2, width=15, state=tk.DISABLED)
-        self.stop_button.pack(side=tk.LEFT, padx=5)
-        self.exit_button = tk.Button(btn_frame, text="Выход", command=self.exit_app, bg="#888888", fg="white", height=2, width=15)
-        self.exit_button.pack(side=tk.LEFT, padx=5)
-
-        # Статус
-        status_frame = tk.Frame(self.root, padx=10, pady=5)
-        status_frame.pack(fill=tk.X)
-        tk.Label(status_frame, text="Status:").pack(side=tk.LEFT)
-        self.status_label = tk.Label(status_frame, text="Ready", fg="blue")
-        self.status_label.pack(side=tk.LEFT, padx=5)
-
-        # Лог
-        results_frame = tk.Frame(self.root, padx=10, pady=5)
-        results_frame.pack(fill=tk.BOTH, expand=True)
-        tk.Label(results_frame, text="Backup Results:").pack(anchor=tk.W)
-        self.log_display = scrolledtext.ScrolledText(results_frame, height=10, width=90, font=("Arial", 10))
-        self.log_display.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.log_display.insert(tk.END, "")
         
-
-        # Чекбокс "Запускать свернутым"
-        #self.start_minimized_var = tk.BooleanVar(value=self.settings.get("start_minimized", False))
-        #self.start_minimized_cb = tk.Checkbutton(dir_frame, text="Запускать свернутым", variable=self.start_minimized_var, command=self.toggle_start_minimized)
-        #self.start_minimized_cb.grid(row=3, column=2, sticky=tk.W)
-        
-        # Чекбокс "Сохранять лог в файл"
-        #self.log_to_file_var = tk.BooleanVar(value=self.settings.get("log_to_file", False))
-        #self.log_to_file_cb = tk.Checkbutton(dir_frame, text="Сохранять лог в файл", variable=self.log_to_file_var)
-        #self.log_to_file_cb.grid(row=2, column=2, sticky=tk.W)
-
-        # Поле для масок исключения файлов/папок
-        tk.Label(dir_frame, text="Исключить (маски через запятую):").grid(row=9, column=0, sticky=tk.W)
-        self.exclude_entry = tk.Entry(dir_frame, width=60)
+        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
+        self.exclude_entry = ttk.Entry(right_col, width=40)
         self.exclude_entry.insert(0, self.settings.get("exclude_patterns", ""))
-        self.exclude_entry.grid(row=9, column=1, padx=5, pady=5, columnspan=2, sticky=tk.W)
-    
+        self.exclude_entry.grid(row=1, column=1, columnspan=3, sticky=tk.EW, pady=(10, 0))
+        
+        # === Секция 4: Control ===
+        control_frame = ttk.LabelFrame(main_frame, text="Control", padding=10)
+        control_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        btn_frame = ttk.Frame(control_frame)
+        btn_frame.pack(fill=tk.X)
+        
+        self.backup_button = ttk.Button(btn_frame, text="Start Backup", command=self.start_backup, width=15)
+        self.backup_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.stop_button = ttk.Button(btn_frame, text="Stop", command=self.stop_backup, width=15, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.exit_button = ttk.Button(btn_frame, text="Exit", command=self.exit_app, width=15)
+        self.exit_button.pack(side=tk.LEFT)
+        
+        # Статус-бар
+        status_frame = ttk.Frame(control_frame)
+        status_frame.pack(fill=tk.X)
+        ttk.Label(status_frame, text="Status:").pack(side=tk.LEFT, padx=(0, 5))
+        self.status_label = ttk.Label(status_frame, text="Ready", foreground="blue")
+        self.status_label.pack(side=tk.LEFT)
+        
+        # === Секция 5: Log ===
+        log_frame = ttk.LabelFrame(main_frame, text="Backup Log", padding=10)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.log_display = scrolledtext.ScrolledText(log_frame, height=8, width=90, font=("Consolas", 9))
+        self.log_display.pack(fill=tk.BOTH, expand=True)
+        
         # Если при загрузке конфига выбрано "Custom", показать поле ввода времени
         if self.schedule_var.get() == "Custom":
             self.custom_time_entry.grid()
             self.custom_hint_label.grid()
+            
     def on_custom_time_changed(self):
         """Вызывается при изменении custom_time в виджете"""
         self.save_config()
@@ -288,7 +293,7 @@ class BackupApp:
         self.save_config()
 
     def update_status(self, message, color="blue"):
-        self.status_label.config(text=message, fg=color)
+        self.status_label.config(text=message, foreground=color)
 
     def start_backup(self):
         if not self.settings["source_dirs"]:
