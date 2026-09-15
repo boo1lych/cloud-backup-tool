@@ -1,0 +1,56 @@
+.scheduler.lock
+
+# === Конфигурация с секретами ===
+config.json
+config_win.json
+# Рекомендуется хранить в репозитории только шаблон:
+# config.example.json
+
+# === База данных и состояние синхронизации ===
+sync_state.db
+*.db-journal
+*.db-wal
+sync_actions.csv
+status_analysis_report.csv
+
+# === Логи ===
+*.log
+sync.log
+
+# === Кэши и временные файлы Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+
+
+# === Отладочные выгрузки и метаданные ===
+meta_source.json
+meta_target.json
+debug_*.json
+dump_*.csv
+
+# === Сборки и артефакты (PyInstaller) ===
+build/
+dist/
+*.spec
+*.exe
+_internal/
+
+# === IDE и редакторы ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+.cursor/
+
+# === ОС ===
+.DS_Store
+Thumbs.db
+desktop.ini

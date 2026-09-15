@@ -1,0 +1,12 @@
+{
+  "source_dirs": [
+    "C:/Users/aantonov/Documents/LocalDocuments"
+  ],
+  "backup_dir": "O:/Documents",
+  "skip_links": true,
+  "start_minimized": false,
+  "backup_schedule": "None",
+  "custom_time": "",
+  "exclude_patterns": "",
+  "log_to_file": false
+}
