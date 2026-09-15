@@ -448,16 +448,28 @@ class BackupApp:
                     files_skipped += 1
                     self.update_log(f"Skipped (symbolic link): {src_file}")
                     continue
+
                 copy_needed = True
                 if os.path.exists(dst_file):
                     src_stat = os.stat(src_file)
                     dst_stat = os.stat(dst_file)
-                    # Добавляем допуск в 2 секунды для st_mtime.
+                    # Разница во времени: источник минус приемник
+                    # Положительное значение = источник новее
+                    # Отрицательное значение = приемник новее
+                    time_diff = src_stat.st_mtime - dst_stat.st_mtime
+
+                    # Допуск в 2 секунды для st_mtime.
                     # Сетевые диски, облачные синхронизации и FAT32/exFAT часто округляют время модификации,
                     # из-за чего строгое равенство (==) всегда возвращает False и файл копируется по кругу.
-                    mtime_diff = abs(src_stat.st_mtime - dst_stat.st_mtime)
-                    if mtime_diff < 2.0 and src_stat.st_size == dst_stat.st_size:
+                    if abs(time_diff) < 2.0 and src_stat.st_size == dst_stat.st_size:
+                        # Файлы идентичны (с учетом погрешности 2 сек)
                         copy_needed = False
+                    elif time_diff < 0:
+                        # Файл в источнике СТАРЕЕ, чем в приемнике.
+                        # Не перезаписываем более новый файл в папке бэкапа.
+                        copy_needed = False
+                        self.update_log(f"Skipped (destination is newer): {src_file}")
+
                 if copy_needed:
                     try:
                         shutil.copy2(src_file, dst_file)
