@@ -53,12 +53,14 @@ class BackupApp:
         self.stop_backup_flag = False
 
         self.load_config()
+        self.sched_stop = threading.Event()
+        self.sched_thread = None
         self.create_widgets()
         self.create_tray_icon()
 
         # Обработчик закрытия окна
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
-
+        self.setup_schedule()
         # Если автозапуск и start_minimized - сразу в трей
         if self.settings.get("start_minimized", False):
             self.hide_window()
@@ -238,6 +240,7 @@ class BackupApp:
     def run_backup(self):
         start_time = time.time()
         total_stats = {"files_copied": 0, "files_skipped": 0, "total_size_mb": 0, "errors": 0}
+        all_copied_files = []
         try:
             self.root.after(0, lambda: self.log_display.delete(1.0, tk.END))
             for source_dir in self.settings["source_dirs"]:
@@ -246,6 +249,7 @@ class BackupApp:
                 stats = self.backup_saves(source_dir, self.settings["backup_dir"])
                 for key in total_stats:
                     total_stats[key] += stats.get(key, 0)
+                all_copied_files.extend(stats.get("copied_files", []))    
             elapsed_time = time.time() - start_time
             speed = total_stats["total_size_mb"] / elapsed_time if elapsed_time > 0 else 0
             if self.stop_backup_flag:
@@ -258,6 +262,16 @@ class BackupApp:
                        f"Time elapsed: {elapsed_time:.2f} seconds\n"
                        f"Average speed: {speed:.2f} MB/s")
                 self.update_log(msg)
+
+                # Итоговая сводка по скопированным файлам
+                if all_copied_files:
+                    summary = f"\n=== Скопированные файлы ({len(all_copied_files)} шт) ===\n"
+                    for f in all_copied_files:
+                        summary += f"• {f}\n"
+                    self.update_log(summary)
+                else:
+                    self.update_log("\n=== Скопированные файлы: нет (все файлы актуальны) ===\n")
+
                 self.update_status(f"Done - {total_stats['files_copied']} files backed up", "green")
         except Exception as e:
             self.update_log(f"Error: {str(e)}")
@@ -273,6 +287,11 @@ class BackupApp:
                        f"Time elapsed: {elapsed_time:.2f} seconds\n"
                        f"Average speed: {speed:.2f} MB/s")
                 self.update_log(msg)
+                if all_copied_files:
+                    summary = f"\n=== Скопированные файлы ({len(all_copied_files)} шт) ===\n"
+                    for f in all_copied_files:
+                        summary += f"• {f}\n"
+                    self.update_log(summary)                
             except Exception:
                 pass
         finally:
@@ -283,6 +302,7 @@ class BackupApp:
         files_copied = 0
         files_skipped = 0
         total_size = 0
+        copied_files = []
         exclude_patterns = [p.strip() for p in self.settings.get("exclude_patterns", "").split(",") if p.strip()]
         # Имя подпапки для этого источника
         src_folder_name = os.path.basename(os.path.normpath(source_dir))
@@ -305,7 +325,8 @@ class BackupApp:
                     return {
                         "files_copied": files_copied,
                         "files_skipped": files_skipped,
-                        "total_size_mb": total_size / 1024 / 1024
+                        "total_size_mb": total_size / 1024 / 1024,
+                        "copied_files": copied_files
                     }
                 src_file = os.path.join(root, file)
                 dst_file = os.path.join(dest_path, file)
@@ -318,13 +339,18 @@ class BackupApp:
                 if os.path.exists(dst_file):
                     src_stat = os.stat(src_file)
                     dst_stat = os.stat(dst_file)
-                    if src_stat.st_mtime == dst_stat.st_mtime and src_stat.st_size == dst_stat.st_size:
+                    # Добавляем допуск в 2 секунды для st_mtime.
+                    # Сетевые диски, облачные синхронизации и FAT32/exFAT часто округляют время модификации,
+                    # из-за чего строгое равенство (==) всегда возвращает False и файл копируется по кругу.
+                    mtime_diff = abs(src_stat.st_mtime - dst_stat.st_mtime)
+                    if mtime_diff < 2.0 and src_stat.st_size == dst_stat.st_size:
                         copy_needed = False
                 if copy_needed:
                     try:
                         shutil.copy2(src_file, dst_file)
                         files_copied += 1
                         total_size += os.path.getsize(src_file)
+                        copied_files.append(src_file)
                         self.update_log(f"Copied: {src_file}")
                     except Exception as e:
                         self.update_log(f"Error copying {src_file}: {str(e)}")
@@ -334,7 +360,8 @@ class BackupApp:
         return {
             "files_copied": files_copied,
             "files_skipped": files_skipped,
-            "total_size_mb": total_size / 1024 / 1024
+            "total_size_mb": total_size / 1024 / 1024,
+            "copied_files": copied_files
         }
 
     def toggle_autorun(self):
