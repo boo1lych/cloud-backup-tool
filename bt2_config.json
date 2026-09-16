@@ -3,7 +3,7 @@
   "autorun": false,
   "start_minimized": false,
   "log_to_file": true,
-  "active_profile": "Default"
+  "active_profile": "Outlook"
  },
  "profiles": {
   "Default": {
@@ -27,7 +27,7 @@
    "backup_schedule": "Daily 23:00",
    "custom_time": "",
    "exclude_patterns": "~, *.tmp",
-   "enabled": true,
+   "enabled": false,
    "auto_start_backup": false
   }
  }
