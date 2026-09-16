@@ -39,6 +39,9 @@ dump_*.csv
 # === Сборки и артефакты (PyInstaller) ===
 build/
 dist/
+Releases/
+scripts/
+logs/
 *.exe
 _internal/
 
