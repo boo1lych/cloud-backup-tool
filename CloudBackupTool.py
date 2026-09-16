@@ -14,6 +14,8 @@ from logging.handlers import RotatingFileHandler
 import sys
 import fnmatch
 import sv_ttk
+import traceback
+import atexit
 
 MAX_COPIED_LIST = 10000
 
@@ -26,7 +28,37 @@ else:
 CONFIG_FILE = os.path.join(BASE_DIR, "bt2_config.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "backup.log")
+CRASH_LOG_FILE = os.path.join(LOG_DIR, "crash_exit.log")
 
+os.makedirs(LOG_DIR, exist_ok=True)
+
+def log_exit_or_crash(reason, exc_info=None):
+    """Логирует причины завершения работы или краха приложения."""
+    msg = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [CRITICAL] {reason}"
+    if exc_info:
+        msg += "\n" + "".join(traceback.format_exception(*exc_info))
+    msg += "\n" + "-" * 50 + "\n"
+    try:
+        with open(CRASH_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(msg)
+    except Exception:
+        pass
+
+def _global_exception_handler(exc_type, exc_value, exc_traceback):
+    log_exit_or_crash("Unhandled exception in main thread", (exc_type, exc_value, exc_traceback))
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+def _thread_exception_handler(args):
+    thread_name = args.thread.name if args.thread else "Unknown"
+    log_exit_or_crash(f"Unhandled exception in thread '{thread_name}'", (args.exc_type, args.exc_value, args.exc_traceback))
+
+def _atexit_handler():
+    log_exit_or_crash("Python interpreter shutdown (atexit triggered)")
+
+sys.excepthook = _global_exception_handler
+if hasattr(threading, 'excepthook'):
+    threading.excepthook = _thread_exception_handler
+atexit.register(_atexit_handler)
 
 def is_reparse_point(path):
     try:
@@ -96,7 +128,6 @@ class BackupApp:
             self.profile_state[pname] = {"running": False, "thread": None, "stop_flag": False}
 
         # --- Ротируемый логгер ---
-        os.makedirs(LOG_DIR, exist_ok=True)
         self.logger = logging.getLogger("CloudBackupTool")
         self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
@@ -1154,6 +1185,7 @@ class BackupApp:
         self.root.after(0, self._shutdown)
 
     def _shutdown(self):
+        log_exit_or_crash("Normal shutdown initiated by user (exit_app called)")
         if hasattr(self, "tray_icon") and self.tray_icon:
             try:
                 self.tray_icon.stop()
@@ -1183,7 +1215,11 @@ class BackupApp:
             return None
 
 
+def _tk_exception_handler(exc_type, exc_value, exc_traceback):
+    log_exit_or_crash("Unhandled Tkinter exception", (exc_type, exc_value, exc_traceback))
+
 if __name__ == "__main__":
     root = tk.Tk()
+    root.report_callback_exception = _tk_exception_handler
     app = BackupApp(root)
     root.mainloop()
