@@ -189,11 +189,11 @@ class BackupApp:
         gbtn_frame = ttk.Frame(global_control)
         gbtn_frame.pack(fill=tk.X)
 
-        ttk.Button(gbtn_frame, text="▶ Start All",
+        ttk.Button(gbtn_frame, text="► Start All",
                    command=self.start_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(gbtn_frame, text="⏹ Stop All",
+        ttk.Button(gbtn_frame, text="■ Stop All",
                    command=self.stop_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(gbtn_frame, text="✖ Exit",
+        ttk.Button(gbtn_frame, text="✕ Exit",
                    command=self.exit_app, width=15).pack(side=tk.LEFT)
 
         # === Панель управления профилями ===
@@ -207,7 +207,7 @@ class BackupApp:
         ttk.Button(profiles_toolbar, text="Duplicate",
                    command=self.duplicate_profile, width=15).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(profiles_toolbar, text="Delete",
-                   command=self.delete_profile, width=15).pack(side=tk.LEFT, padx=(0, 5))
+                command=self.delete_profile, width=15).pack(side=tk.RIGHT)
 
         # === Notebook (вкладки профилей) ===
         self.notebook = ttk.Notebook(main_frame)
@@ -272,12 +272,12 @@ class BackupApp:
                         ).pack(side=tk.LEFT, padx=(0, 20))
 
         # Кнопки Start/Stop профиля
-        widgets["start_btn"] = ttk.Button(ctrl_inner, text="▶ Start",
+        widgets["start_btn"] = ttk.Button(ctrl_inner, text="► Start",
                                           command=lambda pn=profile_name: self.start_profile_backup(pn),
                                           width=12)
         widgets["start_btn"].pack(side=tk.LEFT, padx=(0, 5))
 
-        widgets["stop_btn"] = ttk.Button(ctrl_inner, text="⏹ Stop",
+        widgets["stop_btn"] = ttk.Button(ctrl_inner, text="■ Stop",
                                          command=lambda pn=profile_name: self.stop_profile_backup(pn),
                                          width=12, state=tk.DISABLED)
         widgets["stop_btn"].pack(side=tk.LEFT, padx=(0, 20))
