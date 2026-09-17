@@ -18,6 +18,7 @@ import traceback
 import atexit
 
 MAX_COPIED_LIST = 10000
+MIN_FREE_BYTES = 1024 ** 3  # 1 GB minimum free space required
 
 # Базовая директория: для .exe — рядом с exe, для скрипта — рядом с .py
 if getattr(sys, 'frozen', False):
@@ -726,7 +727,6 @@ class BackupApp:
             return
 
         # Проверка свободного места
-        MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024
         free_bytes = self._get_free_space(backup_dir)
         if free_bytes is not None and free_bytes < MIN_FREE_BYTES:
             free_gb = free_bytes / (1024 ** 3)
