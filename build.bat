@@ -12,7 +12,7 @@ set DIST_DIR=dist
 set PYCACHE_DIR=__pycache__
 
 :: === Генерация имени папки с датой/временем ===
-for /f "tokens=2 delims==" %%i in ('wmic os get localdatetime /value') do set datetime=%%i
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMddHHmmss"') do set datetime=%%i
 set YEAR=%datetime:~0,4%
 set MONTH=%datetime:~4,2%
 set DAY=%datetime:~6,2%
@@ -85,6 +85,26 @@ echo %YELLOW%⚠️  Внимание: backup.ico не найден — икон
 )
 
 echo %GREEN%✅ Все проверки пройдены%RESET%
+echo.
+:: === 2.5. Проверка Python и зависимостей ===
+echo %YELLOW%🐍 Проверка Python и зависимостей...%RESET%
+where python >nul 2>nul
+if !ERRORLEVEL! neq 0 (
+    echo %RED%❌ Ошибка: python не найден в PATH%RESET%
+    echo %YELLOW%💡 Установите Python 3.8+ и добавьте его в PATH%RESET%
+    goto :pause_exit
+)
+python -c "import schedule, pystray, PIL, sv_ttk, PyInstaller" >nul 2>nul
+if !ERRORLEVEL! neq 0 (
+    echo %YELLOW%⚠️  Некоторые зависимости не установлены. Устанавливаю...%RESET%
+    python -m pip install -r requirements.txt
+    if !ERRORLEVEL! neq 0 (
+        echo %RED%❌ Не удалось установить зависимости%RESET%
+        goto :pause_exit
+    )
+    echo %GREEN%✅ Зависимости установлены%RESET%
+)
+echo %GREEN%✅ Python и зависимости в порядке%RESET%
 echo.
 
 :: === 3. Создание выходной папки ===
