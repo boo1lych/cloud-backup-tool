@@ -35,7 +35,9 @@ def validate_custom_time(custom):
             return False, "Time out of range (use 00:00 - 23:59)"
         return False, "Invalid time format (use HH:MM)"
     if custom.isdigit():
-        return True, ""
+        if int(custom) == 0:
+            return False, "Interval must be greater than 0"
+        return True, " "
     if not custom:
         return False, "Value is empty (use HH:MM or minutes)"
     return False, "Invalid value (use HH:MM or minutes)"
@@ -60,7 +62,7 @@ def validate_hhmm(time_str):
 
 
 def backup_saves(source_dir, backup_dir, skip_links, exclude_patterns_str,
-                 all_sources_in_profile, state, log=None):
+all_sources_in_profile, state, log=None):
     """Копирует файлы из источника в приёмник.
 
     Параметры:
@@ -76,6 +78,16 @@ def backup_saves(source_dir, backup_dir, skip_links, exclude_patterns_str,
     Возвращает словарь со статистикой:
         files_copied, files_skipped, total_size_mb, errors, copied_files.
     """
+    if not os.path.exists(source_dir):
+        if log:
+            log(f"Source directory does not exist: {source_dir}")
+        return {
+            "files_copied": 0,
+            "files_skipped": 0,
+            "total_size_mb": 0,
+            "errors": 0,
+            "copied_files": [],
+        }
     files_copied = 0
     files_skipped = 0
     total_size = 0
