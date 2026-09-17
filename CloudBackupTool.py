@@ -18,6 +18,7 @@ import traceback
 import atexit
 
 MAX_COPIED_LIST = 10000
+WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 MIN_FREE_BYTES = 1024 ** 3  # 1 GB minimum free space required
 
 # Базовая директория: для .exe — рядом с exe, для скрипта — рядом с .py
@@ -112,9 +113,11 @@ class BackupApp:
                     "skip_links": True,
                     "backup_schedule": "None",
                     "custom_time": "",
-                    "exclude_patterns": "~$",
+                    "exclude_patterns": "~$, *.tmp",
                     "enabled": False,
                     "auto_start_backup": False,
+                    "weekly_days": ["Monday"],
+                    "weekly_time": "23:00",
                 }
             },
         }
@@ -355,7 +358,7 @@ class BackupApp:
         )
         widgets["schedule_menu"] = ttk.Combobox(
             right_col, textvariable=widgets["schedule_var"],
-            values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom"],
+            values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly"],
             state="readonly", width=15
         )
         widgets["schedule_menu"].grid(row=0, column=1, padx=(0, 10))
@@ -375,30 +378,63 @@ class BackupApp:
         )
         if profile_data.get("backup_schedule") != "Custom":
             widgets["custom_time_entry"].grid_remove()
-
+        widgets["weekly_time_entry"] = ttk.Entry(right_col, width=10)
+        widgets["weekly_time_entry"].insert(0, profile_data.get("weekly_time", "23:00"))
+        widgets["weekly_time_entry"].grid(row=0, column=2, padx=(0, 10))
+        widgets["weekly_time_entry"].bind(
+            "<FocusOut>", lambda e, pn=profile_name: self.on_weekly_settings_changed(pn)
+        )
+        widgets["weekly_time_entry"].bind(
+            "<Return>", lambda e, pn=profile_name: self.on_weekly_settings_changed(pn)
+        )
+        if profile_data.get("backup_schedule") != "Weekly":
+            widgets["weekly_time_entry"].grid_remove()
         widgets["custom_hint_label"] = tk.Label(
             right_col,
             text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)",
             fg="gray"
         )
         widgets["custom_hint_label"].grid(row=1, column=1, columnspan=2,
-                                          sticky=tk.W, pady=(0, 5))
+                                        sticky=tk.W, pady=(0, 5))
         if profile_data.get("backup_schedule") != "Custom":
             widgets["custom_hint_label"].grid_remove()
-
+        widgets["weekly_hint_label"] = tk.Label(
+            right_col,
+            text="Time format: HH:MM (e.g., 23:00)",
+            fg="gray"
+        )
+        widgets["weekly_hint_label"].grid(row=1, column=1, columnspan=2,
+                                        sticky=tk.W, pady=(0, 5))
+        if profile_data.get("backup_schedule") != "Weekly":
+            widgets["weekly_hint_label"].grid_remove()
+        widgets["weekly_days_frame"] = ttk.Frame(right_col)
+        widgets["weekly_days_frame"].grid(row=2, column=0, columnspan=3,
+                                        sticky=tk.W, pady=(0, 5))
+        widgets["weekly_day_vars"] = {}
+        selected_days = profile_data.get("weekly_days", ["Monday"])
+        for day in WEEK_DAYS:
+            var = tk.BooleanVar(value=day in selected_days)
+            widgets["weekly_day_vars"][day] = var
+            ttk.Checkbutton(
+                widgets["weekly_days_frame"],
+                text=day[:3],
+                variable=var,
+                command=lambda pn=profile_name: self.on_weekly_settings_changed(pn)
+            ).pack(side=tk.LEFT, padx=(0, 5))
+        if profile_data.get("backup_schedule") != "Weekly":
+            widgets["weekly_days_frame"].grid_remove()
         ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(
-            row=2, column=0, sticky=tk.W, pady=(10, 0)
+            row=3, column=0, sticky=tk.W, pady=(10, 0)
         )
         widgets["exclude_entry"] = ttk.Entry(right_col, width=40)
         widgets["exclude_entry"].insert(0, profile_data.get("exclude_patterns", ""))
-        widgets["exclude_entry"].grid(row=2, column=1, columnspan=2,
-                                      sticky=tk.EW, pady=(10, 0))
-
+        widgets["exclude_entry"].grid(row=3, column=1, columnspan=2,
+                                    sticky=tk.EW, pady=(10, 0))
         widgets["exclude_hint_label"] = tk.Label(
             right_col, text="Masks: *$*.txt, ~$, *.tmp, logs/*", fg="gray"
         )
-        widgets["exclude_hint_label"].grid(row=3, column=1, columnspan=2,
-                                           sticky=tk.W, pady=(0, 5))
+        widgets["exclude_hint_label"].grid(row=4, column=1, columnspan=2,
+                                            sticky=tk.W, pady=(0, 5))
 
         self.profile_widgets[profile_name] = widgets
         self.update_profile_status(profile_name)
@@ -483,6 +519,8 @@ class BackupApp:
             "exclude_patterns": "",
             "enabled": False,
             "auto_start_backup": False,
+            "weekly_days": ["Monday"],
+            "weekly_time": "23:00",
         }
         self.profile_state[name] = {"running": False, "thread": None, "stop_flag": False}
         self._create_profile_tab(name)
@@ -603,6 +641,8 @@ class BackupApp:
         p["exclude_patterns"] = w["exclude_entry"].get()
         p["enabled"] = w["enabled_var"].get()
         p["auto_start_backup"] = w["auto_start_backup_var"].get()
+        p["weekly_time"] = w["weekly_time_entry"].get()
+        p["weekly_days"] = [day for day, var in w["weekly_day_vars"].items() if var.get()]
 
     def save_profile_settings(self, profile_name):
         self._sync_profile_widgets_to_settings(profile_name)
@@ -643,18 +683,28 @@ class BackupApp:
         self.setup_schedule()
         self._update_custom_time_hint(profile_name)
 
-    def schedule_changed(self, profile_name):
-        w = self.profile_widgets[profile_name]
-        value = w["schedule_var"].get()
-        if value == "Custom":
-            w["custom_time_entry"].grid()
-            w["custom_hint_label"].grid()
-        else:
-            w["custom_time_entry"].grid_remove()
-            w["custom_hint_label"].grid_remove()
+    def on_weekly_settings_changed(self, profile_name):
         self.save_profile_settings(profile_name)
         self.setup_schedule()
         self._update_custom_time_hint(profile_name)
+
+    def schedule_changed(self, profile_name):
+        w = self.profile_widgets[profile_name]
+        value = w["schedule_var"].get()
+        w["custom_time_entry"].grid_remove()
+        w["custom_hint_label"].grid_remove()
+        w["weekly_time_entry"].grid_remove()
+        w["weekly_days_frame"].grid_remove()
+        w["weekly_hint_label"].grid_remove()
+        if value == "Custom":
+            w["custom_time_entry"].grid()
+            w["custom_hint_label"].grid()
+        elif value == "Weekly":
+            w["weekly_time_entry"].grid()
+            w["weekly_days_frame"].grid()
+            w["weekly_hint_label"].grid()
+        self.save_profile_settings(profile_name)
+        self.setup_schedule()
         self.update_tray_menu()
 
     def toggle_start_minimized(self):
@@ -1040,22 +1090,53 @@ class BackupApp:
         return False, "Invalid value (use HH:MM or minutes)"
 
     def _update_custom_time_hint(self, profile_name):
-        """Обновляет подсказку под полем Custom time: серая при валидном значении, красная при ошибке."""
+        """Обновляет подсказку под полем времени: серая при валидном значении, красная при ошибке."""
         w = self.profile_widgets.get(profile_name)
-        if not w or "custom_hint_label" not in w:
+        if not w:
             return
         profile = self.settings["profiles"].get(profile_name, {})
-        if profile.get("backup_schedule") != "Custom":
-            return
-        custom = profile.get("custom_time", "")
-        ok, err = self._validate_custom_time(custom)
-        if ok:
-            w["custom_hint_label"].config(
-                text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)",
-                fg="gray",
-            )
-        else:
-            w["custom_hint_label"].config(text=err, fg="red")
+        sched = profile.get("backup_schedule")
+        if sched == "Custom" and "custom_hint_label" in w:
+            custom = profile.get("custom_time", "")
+            ok, err = self._validate_custom_time(custom)
+            if ok:
+                w["custom_hint_label"].config(
+                    text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)",
+                    fg="gray",
+                )
+            else:
+                w["custom_hint_label"].config(text=err, fg="red")
+        elif sched == "Weekly" and "weekly_hint_label" in w:
+            weekly_time = profile.get("weekly_time", "")
+            weekly_days = profile.get("weekly_days", [])
+            if not weekly_days:
+                w["weekly_hint_label"].config(text="Select at least one day", fg="red")
+                return
+            ok, err = self._validate_hhmm(weekly_time)
+            if ok:
+                w["weekly_hint_label"].config(
+                    text="Time format: HH:MM (e.g., 23:00)",
+                    fg="gray",
+                )
+            else:
+                w["weekly_hint_label"].config(text=err, fg="red")
+
+    def _validate_hhmm(self, time_str):
+        """Проверяет время в формате HH:MM. Возвращает (ok, error_message)."""
+        time_str = time_str.strip()
+        if ":" not in time_str:
+            return False, "Invalid time format (use HH:MM)"
+        parts = time_str.split(":")
+        if len(parts) != 2:
+            return False, "Invalid time format (use HH:MM)"
+        if not parts[0].isdigit() or not parts[1].isdigit():
+            return False, "Invalid time format (use HH:MM)"
+        h, m = int(parts[0]), int(parts[1])
+        if not (0 <= h <= 23):
+            return False, "Hours out of range (use 00-23)"
+        if not (0 <= m <= 59):
+            return False, "Minutes out of range (use 00-59)"
+        return True, ""
 
     def _register_schedule(self, profile_name, profile):
         sched = profile.get("backup_schedule", "None")
@@ -1078,6 +1159,23 @@ class BackupApp:
             else:
                 schedule.every(int(custom)).minutes.do(self.scheduled_backup, profile_name)
                 self.update_log(f"Schedule (profile '{profile_name}'): every {custom} minutes")
+        elif sched == "Weekly":
+            weekly_days = profile.get("weekly_days", [])
+            weekly_time = profile.get("weekly_time", "")
+            if not weekly_days:
+                self.update_log(f"Error: no days selected for weekly schedule for '{profile_name}'")
+                return
+            ok, err = self._validate_hhmm(weekly_time)
+            if not ok:
+                self.update_log(f"Error: {err} for '{profile_name}': '{weekly_time}'")
+                return
+            for day in weekly_days:
+                getattr(schedule.every(), day.lower()).at(weekly_time).do(
+                    self.scheduled_backup, profile_name
+                )
+            days_str = ", ".join(weekly_days)
+            self.update_log(f"Schedule (profile '{profile_name}'): weekly on {days_str} at {weekly_time}")
+
 
     def run_scheduler(self):
         try:
@@ -1133,6 +1231,8 @@ class BackupApp:
                 "exclude_patterns": data.get("exclude_patterns", ""),
                 "enabled": data.get("auto_start_backup", False),
                 "auto_start_backup": data.get("auto_start_backup", False),
+                "weekly_days": ["Monday"],
+                "weekly_time": "23:00",
             }
             self.settings = {
                 "global": {
@@ -1155,10 +1255,14 @@ class BackupApp:
             self.settings["global"].update(data["global"])
         if "profiles" in data:
             self.settings["profiles"] = data["profiles"]
-            # Гарантируем наличие поля "enabled" в каждом профиле
+            # Гарантируем наличие полей "enabled", "weekly_days", "weekly_time" в каждом профиле
             for pname, pdata in self.settings["profiles"].items():
                 if "enabled" not in pdata:
                     pdata["enabled"] = pdata.get("auto_start_backup", False)
+                if "weekly_days" not in pdata:
+                    pdata["weekly_days"] = ["Monday"]
+                if "weekly_time" not in pdata:
+                    pdata["weekly_time"] = "23:00"
             if "Default" not in self.settings["profiles"]:
                 self.settings["profiles"]["Default"] = {
                     "source_dirs": [],
@@ -1169,6 +1273,8 @@ class BackupApp:
                     "exclude_patterns": "",
                     "enabled": False,
                     "auto_start_backup": False,
+                    "weekly_days": ["Monday"],
+                    "weekly_time": "23:00",
                 }
 
     # =========================================================
