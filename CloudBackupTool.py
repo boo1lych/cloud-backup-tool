@@ -545,6 +545,7 @@ class BackupApp:
         self.settings["profiles"][new_name] = copy.deepcopy(
             self.settings["profiles"][src_name]
         )
+        self.settings["profiles"][new_name]["enabled"] = False
         self.profile_state[new_name] = {"running": False, "thread": None, "stop_flag": False}
         self._create_profile_tab(new_name)
         self.notebook.select(self.profile_tabs[new_name])
