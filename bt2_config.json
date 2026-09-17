@@ -14,7 +14,7 @@
    "skip_links": true,
    "backup_schedule": "Custom",
    "custom_time": "1",
-   "exclude_patterns": "~$",
+   "exclude_patterns": "~, *.tmp",
    "auto_start_backup": true,
    "enabled": true,
    "weekly_days": [
