@@ -16,7 +16,12 @@
    "custom_time": "1",
    "exclude_patterns": "~$",
    "auto_start_backup": true,
-   "enabled": true
+   "enabled": true,
+   "weekly_days": [
+    "Monday",
+    "Tuesday"
+   ],
+   "weekly_time": "15:05"
   },
   "Outlook": {
    "source_dirs": [
@@ -28,7 +33,11 @@
    "custom_time": "",
    "exclude_patterns": "~, *.tmp",
    "enabled": false,
-   "auto_start_backup": false
+   "auto_start_backup": false,
+   "weekly_days": [
+    "Monday"
+   ],
+   "weekly_time": "23:00"
   }
  }
 }
