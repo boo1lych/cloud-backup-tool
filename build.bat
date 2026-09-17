@@ -88,21 +88,30 @@ echo %GREEN%✅ Все проверки пройдены%RESET%
 echo.
 :: === 2.5. Проверка Python и зависимостей ===
 echo %YELLOW%🐍 Проверка Python и зависимостей...%RESET%
+:: Приоритет: venv314 > системный python
+if exist "venv314\Scripts\python.exe" (
+set "PYTHON=venv314\Scripts\python.exe"
+echo   ✅ Используем venv314
+) else (
+set "PYTHON=python"
 where python >nul 2>nul
 if !ERRORLEVEL! neq 0 (
-    echo %RED%❌ Ошибка: python не найден в PATH%RESET%
-    echo %YELLOW%💡 Установите Python 3.8+ и добавьте его в PATH%RESET%
-    goto :pause_exit
+echo %RED%❌ Ошибка: python не найден в PATH%RESET%
+echo %YELLOW%💡 Установите Python 3.8+ и добавьте его в PATH%RESET%
+echo %YELLOW%💡 Или создайте venv: py -3.14 -m venv venv314%RESET%
+goto :pause_exit
 )
-python -c "import schedule, pystray, PIL, sv_ttk, PyInstaller" >nul 2>nul
+echo   ℹ️  venv314 не найден, используем системный python
+)
+!PYTHON! -c "import schedule, pystray, PIL, sv_ttk, PyInstaller" >nul 2>nul
 if !ERRORLEVEL! neq 0 (
-    echo %YELLOW%⚠️  Некоторые зависимости не установлены. Устанавливаю...%RESET%
-    python -m pip install -r requirements.txt
-    if !ERRORLEVEL! neq 0 (
-        echo %RED%❌ Не удалось установить зависимости%RESET%
-        goto :pause_exit
-    )
-    echo %GREEN%✅ Зависимости установлены%RESET%
+echo %YELLOW%⚠️  Некоторые зависимости не установлены. Устанавливаю...%RESET%
+!PYTHON! -m pip install -r requirements.txt
+if !ERRORLEVEL! neq 0 (
+echo %RED%❌ Не удалось установить зависимости%RESET%
+goto :pause_exit
+)
+echo %GREEN%✅ Зависимости установлены%RESET%
 )
 echo %GREEN%✅ Python и зависимости в порядке%RESET%
 echo.
