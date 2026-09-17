@@ -3,7 +3,9 @@
   "autorun": false,
   "start_minimized": false,
   "log_to_file": true,
-  "active_profile": "Default"
+  "active_profile": "Default",
+  "errors_last_read_pos": 1016,
+  "profiles_collapsed": true
  },
  "profiles": {
   "Default": {
@@ -21,7 +23,27 @@
     "Monday",
     "Tuesday"
    ],
-   "weekly_time": "15:05"
+   "weekly_time": "15:05",
+   "process_control": {
+    "enabled": false,
+    "close_before": [],
+    "close_mode": "graceful_then_force",
+    "graceful_timeout_sec": 10,
+    "on_close_failure": "abort",
+    "restore_after": "only_if_was_running"
+   },
+   "retry": {
+    "enabled": false,
+    "max_attempts": 3,
+    "interval_seconds": 300,
+    "retry_on": [
+     "disk_unavailable",
+     "process_close_failed",
+     "copy_errors"
+    ],
+    "on_total_failure": []
+   },
+   "total_timeout_minutes": 0
   },
   "Outlook": {
    "source_dirs": [
@@ -37,7 +59,27 @@
    "weekly_days": [
     "Monday"
    ],
-   "weekly_time": "23:00"
+   "weekly_time": "23:00",
+   "process_control": {
+    "enabled": false,
+    "close_before": [],
+    "close_mode": "graceful_then_force",
+    "graceful_timeout_sec": 10,
+    "on_close_failure": "abort",
+    "restore_after": "only_if_was_running"
+   },
+   "retry": {
+    "enabled": false,
+    "max_attempts": 3,
+    "interval_seconds": 300,
+    "retry_on": [
+     "disk_unavailable",
+     "process_close_failed",
+     "copy_errors"
+    ],
+    "on_total_failure": []
+   },
+   "total_timeout_minutes": 0
   }
  }
 }
