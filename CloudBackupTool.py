@@ -12,11 +12,11 @@ import schedule
 import logging
 from logging.handlers import RotatingFileHandler
 import sys
-import fnmatch
 import sv_ttk
 import traceback
 import atexit
 import queue
+from backup_logic import validate_custom_time, validate_hhmm, backup_saves, is_reparse_point
 
 MAX_COPIED_LIST = 10000
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -39,7 +39,7 @@ def log_exit_or_crash(reason, exc_info=None):
     """Логирует причины завершения работы или краха приложения."""
     msg = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [CRITICAL] {reason}"
     if exc_info:
-        msg += "\n" + "".join(traceback.format_exception(*exc_info))
+        msg += "\n" + " ".join(traceback.format_exception(*exc_info))
     msg += "\n" + "-" * 50 + "\n"
     try:
         with open(CRASH_LOG_FILE, "a", encoding="utf-8") as f:
@@ -63,20 +63,8 @@ if hasattr(threading, 'excepthook'):
     threading.excepthook = _thread_exception_handler
 atexit.register(_atexit_handler)
 
-def is_reparse_point(path):
-    try:
-        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
-        if attrs == -1:
-            return False
-        FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
-        return bool(attrs & FILE_ATTRIBUTE_REPARSE_POINT)
-    except Exception:
-        return False
-
-
 import pystray
 from PIL import Image
-
 
 class BackupApp:
     def __init__(self, root):
@@ -151,10 +139,10 @@ class BackupApp:
         self.sched_stop = threading.Event()
         self.sched_thread = None
         self.schedule_lock = threading.Lock()
-
         self.profile_tabs = {}
         self.profile_widgets = {}
         self.log_queue = queue.Queue()
+
         self.create_widgets()
         self.root.after(1000, self._flush_log_ui)
         self.create_tray_icon()
@@ -191,10 +179,8 @@ class BackupApp:
         # === Глобальная панель управления (самый верх) ===
         global_control = ttk.LabelFrame(main_frame, text="Global Control", padding=10)
         global_control.pack(fill=tk.X, pady=(0, 10))
-
         gbtn_frame = ttk.Frame(global_control)
         gbtn_frame.pack(fill=tk.X)
-
         ttk.Button(gbtn_frame, text="► Start All",
                    command=self.start_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(gbtn_frame, text="■ Stop All",
@@ -205,7 +191,6 @@ class BackupApp:
         # === Панель управления профилями ===
         profiles_toolbar = ttk.Frame(main_frame)
         profiles_toolbar.pack(fill=tk.X, pady=(0, 5))
-
         ttk.Button(profiles_toolbar, text="New Profile",
                    command=self.new_profile, width=15).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(profiles_toolbar, text="Rename",
@@ -219,26 +204,22 @@ class BackupApp:
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
-
         for profile_name in self.settings["profiles"].keys():
             self._create_profile_tab(profile_name)
 
         # === Глобальные настройки ===
         global_frame = ttk.LabelFrame(main_frame, text="Global Settings", padding=10)
         global_frame.pack(fill=tk.X, pady=(0, 10))
-
         self.log_to_file_var = tk.BooleanVar(
             value=self.settings["global"].get("log_to_file", True)
         )
         ttk.Checkbutton(global_frame, text="Save log to file",
                         variable=self.log_to_file_var,
                         command=self.toggle_log_to_file).pack(side=tk.LEFT, padx=(0, 15))
-
         self.autorun_var = tk.BooleanVar(value=self.check_autorun())
         ttk.Checkbutton(global_frame, text="Run at Windows startup",
                         variable=self.autorun_var,
                         command=self.toggle_autorun).pack(side=tk.LEFT, padx=(0, 15))
-
         self.start_minimized_var = tk.BooleanVar(
             value=self.settings["global"].get("start_minimized", False)
         )
@@ -249,7 +230,6 @@ class BackupApp:
         # === Log ===
         log_frame = ttk.LabelFrame(main_frame, text="Backup Log", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True)
-
         self.log_display = scrolledtext.ScrolledText(
             log_frame, height=8, width=90, font=("Consolas", 9)
         )
@@ -266,7 +246,6 @@ class BackupApp:
         # === Панель управления профилем (switch + кнопки + статус) ===
         ctrl_frame = ttk.LabelFrame(tab, text="Profile Control", padding=10)
         ctrl_frame.pack(fill=tk.X, pady=(0, 10))
-
         ctrl_inner = ttk.Frame(ctrl_frame)
         ctrl_inner.pack(fill=tk.X)
 
@@ -282,7 +261,6 @@ class BackupApp:
                                           command=lambda pn=profile_name: self.start_profile_backup(pn),
                                           width=12)
         widgets["start_btn"].pack(side=tk.LEFT, padx=(0, 5))
-
         widgets["stop_btn"] = ttk.Button(ctrl_inner, text="■ Stop",
                                          command=lambda pn=profile_name: self.stop_profile_backup(pn),
                                          width=12, state=tk.DISABLED)
@@ -295,14 +273,12 @@ class BackupApp:
         # === Source Directories ===
         source_frame = ttk.LabelFrame(tab, text="Source Directories", padding=10)
         source_frame.pack(fill=tk.X, pady=(0, 10))
-
         widgets["source_listbox"] = tk.Listbox(
             source_frame, selectmode=tk.EXTENDED, height=4, width=80
         )
         widgets["source_listbox"].pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         for path in profile_data.get("source_dirs", []):
             widgets["source_listbox"].insert(tk.END, path)
-
         source_btns = ttk.Frame(source_frame)
         source_btns.pack(side=tk.RIGHT, fill=tk.Y)
         ttk.Button(source_btns, text="Add...",
@@ -315,7 +291,6 @@ class BackupApp:
         # === Backup Destination ===
         dest_frame = ttk.LabelFrame(tab, text="Backup Destination", padding=10)
         dest_frame.pack(fill=tk.X, pady=(0, 10))
-
         ttk.Label(dest_frame, text="Directory:").grid(
             row=0, column=0, sticky=tk.W, padx=(0, 10)
         )
@@ -329,7 +304,6 @@ class BackupApp:
         # === Profile Settings ===
         settings_frame = ttk.LabelFrame(tab, text="Profile Settings", padding=10)
         settings_frame.pack(fill=tk.X, pady=(0, 10))
-
         left_col = ttk.Frame(settings_frame)
         left_col.grid(row=0, column=0, sticky=tk.NW, padx=(0, 20))
 
@@ -380,6 +354,7 @@ class BackupApp:
         )
         if profile_data.get("backup_schedule") != "Custom":
             widgets["custom_time_entry"].grid_remove()
+
         widgets["weekly_time_entry"] = ttk.Entry(right_col, width=10)
         widgets["weekly_time_entry"].insert(0, profile_data.get("weekly_time", "23:00"))
         widgets["weekly_time_entry"].grid(row=0, column=2, padx=(0, 10))
@@ -391,6 +366,7 @@ class BackupApp:
         )
         if profile_data.get("backup_schedule") != "Weekly":
             widgets["weekly_time_entry"].grid_remove()
+
         widgets["custom_hint_label"] = tk.Label(
             right_col,
             text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)",
@@ -400,6 +376,7 @@ class BackupApp:
                                         sticky=tk.W, pady=(0, 5))
         if profile_data.get("backup_schedule") != "Custom":
             widgets["custom_hint_label"].grid_remove()
+
         widgets["weekly_hint_label"] = tk.Label(
             right_col,
             text="Time format: HH:MM (e.g., 23:00)",
@@ -409,6 +386,7 @@ class BackupApp:
                                         sticky=tk.W, pady=(0, 5))
         if profile_data.get("backup_schedule") != "Weekly":
             widgets["weekly_hint_label"].grid_remove()
+
         widgets["weekly_days_frame"] = ttk.Frame(right_col)
         widgets["weekly_days_frame"].grid(row=2, column=0, columnspan=3,
                                         sticky=tk.W, pady=(0, 5))
@@ -425,6 +403,7 @@ class BackupApp:
             ).pack(side=tk.LEFT, padx=(0, 5))
         if profile_data.get("backup_schedule") != "Weekly":
             widgets["weekly_days_frame"].grid_remove()
+
         ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(
             row=3, column=0, sticky=tk.W, pady=(10, 0)
         )
@@ -495,7 +474,6 @@ class BackupApp:
         prev_active = self.settings["global"].get("active_profile")
         if prev_active and prev_active in self.profile_widgets:
             self.save_profile_settings(prev_active)
-
         new_active = self.get_active_profile_name()
         self.settings["global"]["active_profile"] = new_active
         self.save_config()
@@ -549,21 +527,16 @@ class BackupApp:
         if new_name in self.settings["profiles"]:
             messagebox.showerror("Error", f"Profile '{new_name}' already exists.")
             return
-
         self.settings["profiles"][new_name] = self.settings["profiles"].pop(old_name)
         self.profile_state[new_name] = self.profile_state.pop(old_name)
-
         old_tab = self.profile_tabs.pop(old_name)
         self.notebook.forget(old_tab)
         old_tab.destroy()
         del self.profile_widgets[old_name]
-
         self._create_profile_tab(new_name)
         self.notebook.select(self.profile_tabs[new_name])
-
         if self.settings["global"].get("active_profile") == old_name:
             self.settings["global"]["active_profile"] = new_name
-
         self.save_config()
         self.setup_schedule()
 
@@ -603,18 +576,15 @@ class BackupApp:
             return
         if not messagebox.askyesno("Confirm Delete", f"Delete profile '{name}'?"):
             return
-
         tab = self.profile_tabs.pop(name)
         self.notebook.forget(tab)
         tab.destroy()
         del self.profile_widgets[name]
         del self.settings["profiles"][name]
         self.profile_state.pop(name, None)
-
         if self.settings["global"].get("active_profile") == name:
             self.settings["global"]["active_profile"] = "Default"
             self.notebook.select(self.profile_tabs["Default"])
-
         self.save_config()
         self.setup_schedule()
 
@@ -727,6 +697,7 @@ class BackupApp:
         self.log_queue.put(log_line)
         if self.settings["global"].get("log_to_file", False):
             self.logger.info(message)
+
     def _flush_log_ui(self):
         """Периодически забирает накопленные строки лога из очереди и вставляет их в виджет одним пакетом."""
         lines = []
@@ -804,7 +775,6 @@ class BackupApp:
         state["stop_flag"] = False
         self._set_profile_running(profile_name, True)
         self.update_log(f"=== Starting backup for profile '{profile_name}' ===")
-
         t = threading.Thread(
             target=self.run_backup, args=(profile_name,), daemon=True
         )
@@ -859,8 +829,9 @@ class BackupApp:
             for source_dir in source_dirs:
                 if state.get("stop_flag", False):
                     break
-                stats = self.backup_saves(
-                    source_dir, backup_dir, skip_links, exclude_patterns_str, profile_name
+                stats = backup_saves(
+                    source_dir, backup_dir, skip_links, exclude_patterns_str,
+                    source_dirs, state, log=self.update_log
                 )
                 for key in total_stats:
                     total_stats[key] += stats.get(key, 0)
@@ -891,7 +862,6 @@ class BackupApp:
                     f"Average speed: {speed:.2f} MB/s"
                 )
                 self.update_log(msg)
-
                 total_count = total_stats.get("total_copied_count", total_stats["files_copied"])
                 if all_copied_files:
                     summary = f"\n=== Copied files ({total_count}) ===\n"
@@ -907,111 +877,6 @@ class BackupApp:
             self.update_log(f"[{profile_name}] Error: {str(e)}")
         finally:
             self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
-
-    def backup_saves(self, source_dir, backup_dir, skip_links, exclude_patterns_str, profile_name):
-        files_copied = 0
-        files_skipped = 0
-        total_size = 0
-        errors = 0
-        copied_files = []
-
-        exclude_patterns = [p.strip() for p in exclude_patterns_str.split(",") if p.strip()]
-        normalized_patterns = []
-        for p in exclude_patterns:
-            if "*" in p or "?" in p:
-                normalized_patterns.append(p)
-            else:
-                normalized_patterns.append(f"*{p}*")
-
-        src_base = os.path.basename(os.path.normpath(source_dir))
-        profile = self.settings["profiles"].get(profile_name, {})
-        all_sources_in_profile = profile.get("source_dirs", [])
-        same_name_sources = [
-            d for d in all_sources_in_profile
-            if os.path.basename(os.path.normpath(d)) == src_base
-        ]
-        if len(same_name_sources) > 1:
-            src_folder_name = os.path.normpath(source_dir)
-            for ch in '<>:"/\\|?*':
-                src_folder_name = src_folder_name.replace(ch, "_")
-        else:
-            src_folder_name = src_base
-
-        dest_root = os.path.join(backup_dir, src_folder_name)
-        os.makedirs(dest_root, exist_ok=True)
-
-        state = self.profile_state.get(profile_name, {})
-
-        def walk_error(err):
-            self.update_log(f"Error accessing path: {err}")
-
-        for root, dirs, files in os.walk(source_dir, topdown=True, onerror=walk_error):
-            if skip_links:
-                dirs[:] = [d for d in dirs if not is_reparse_point(os.path.join(root, d))]
-
-            rel_path = os.path.relpath(root, source_dir)
-            dest_path = os.path.join(dest_root, rel_path) if rel_path != "." else dest_root
-            os.makedirs(dest_path, exist_ok=True)
-
-            for file in files:
-                file_path = os.path.join(rel_path, file) if rel_path != "." else file
-                if any(
-                    fnmatch.fnmatch(file, pattern) or fnmatch.fnmatch(file_path, pattern)
-                    for pattern in normalized_patterns
-                ):
-                    files_skipped += 1
-                    self.update_log(f"Skipped (excluded by pattern): {os.path.join(root, file)}")
-                    continue
-
-                if state.get("stop_flag", False):
-                    return {
-                        "files_copied": files_copied,
-                        "files_skipped": files_skipped,
-                        "total_size_mb": total_size / 1024 / 1024,
-                        "errors": errors,
-                        "copied_files": copied_files,
-                    }
-
-                src_file = os.path.join(root, file)
-                dst_file = os.path.join(dest_path, file)
-
-                if skip_links and is_reparse_point(src_file):
-                    files_skipped += 1
-                    self.update_log(f"Skipped (symbolic link): {src_file}")
-                    continue
-
-                copy_needed = True
-                if os.path.exists(dst_file):
-                    src_stat = os.stat(src_file)
-                    dst_stat = os.stat(dst_file)
-                    time_diff = src_stat.st_mtime - dst_stat.st_mtime
-                    if abs(time_diff) < 2.0 and src_stat.st_size == dst_stat.st_size:
-                        copy_needed = False
-                    elif time_diff < 0:
-                        copy_needed = False
-                        self.update_log(f"Skipped (destination is newer): {src_file}")
-
-                if copy_needed:
-                    try:
-                        shutil.copy2(src_file, dst_file)
-                        files_copied += 1
-                        total_size += os.path.getsize(src_file)
-                        copied_files.append(src_file)
-                        self.update_log(f"Copied: {src_file}")
-                    except Exception as e:
-                        errors += 1
-                        self.update_log(f"Error copying {src_file}: {str(e)}")
-                else:
-                    files_skipped += 1
-                    self.update_log(f"Skipped (unchanged): {src_file}")
-
-        return {
-            "files_copied": files_copied,
-            "files_skipped": files_skipped,
-            "total_size_mb": total_size / 1024 / 1024,
-            "errors": errors,
-            "copied_files": copied_files,
-        }
 
     # =========================================================
     # ===================== AUTORUN ===========================
@@ -1064,10 +929,8 @@ class BackupApp:
             if self.sched_thread.is_alive():
                 self.update_log("[WARNING] Scheduler thread did not stop in 2s, continuing anyway")
         self.sched_stop.clear()
-
         with self.schedule_lock:
             schedule.clear()
-
         for profile_name, profile in self.settings["profiles"].items():
             if not profile.get("enabled", False):
                 continue
@@ -1078,26 +941,8 @@ class BackupApp:
                 self._register_schedule(profile_name, profile)
             except Exception as e:
                 self.update_log(f"Error registering schedule for '{profile_name}': {e}")
-
         self.sched_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.sched_thread.start()
-
-    def _validate_custom_time(self, custom):
-        """Проверяет значение custom_time. Возвращает (ok, error_message)."""
-        custom = custom.strip()
-        if ":" in custom:
-            parts = custom.split(":")
-            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                h, m = int(parts[0]), int(parts[1])
-                if 0 <= h <= 23 and 0 <= m <= 59:
-                    return True, ""
-                return False, "Time out of range (use 00:00 - 23:59)"
-            return False, "Invalid time format (use HH:MM)"
-        if custom.isdigit():
-            return True, ""
-        if not custom:
-            return False, "Value is empty (use HH:MM or minutes)"
-        return False, "Invalid value (use HH:MM or minutes)"
 
     def _update_custom_time_hint(self, profile_name):
         """Обновляет подсказку под полем времени: серая при валидном значении, красная при ошибке."""
@@ -1108,7 +953,7 @@ class BackupApp:
         sched = profile.get("backup_schedule")
         if sched == "Custom" and "custom_hint_label" in w:
             custom = profile.get("custom_time", "")
-            ok, err = self._validate_custom_time(custom)
+            ok, err = validate_custom_time(custom)
             if ok:
                 w["custom_hint_label"].config(
                     text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)",
@@ -1122,7 +967,7 @@ class BackupApp:
             if not weekly_days:
                 w["weekly_hint_label"].config(text="Select at least one day", fg="red")
                 return
-            ok, err = self._validate_hhmm(weekly_time)
+            ok, err = validate_hhmm(weekly_time)
             if ok:
                 w["weekly_hint_label"].config(
                     text="Time format: HH:MM (e.g., 23:00)",
@@ -1130,23 +975,6 @@ class BackupApp:
                 )
             else:
                 w["weekly_hint_label"].config(text=err, fg="red")
-
-    def _validate_hhmm(self, time_str):
-        """Проверяет время в формате HH:MM. Возвращает (ok, error_message)."""
-        time_str = time_str.strip()
-        if ":" not in time_str:
-            return False, "Invalid time format (use HH:MM)"
-        parts = time_str.split(":")
-        if len(parts) != 2:
-            return False, "Invalid time format (use HH:MM)"
-        if not parts[0].isdigit() or not parts[1].isdigit():
-            return False, "Invalid time format (use HH:MM)"
-        h, m = int(parts[0]), int(parts[1])
-        if not (0 <= h <= 23):
-            return False, "Hours out of range (use 00-23)"
-        if not (0 <= m <= 59):
-            return False, "Minutes out of range (use 00-59)"
-        return True, ""
 
     def _register_schedule(self, profile_name, profile):
         sched = profile.get("backup_schedule", "None")
@@ -1160,7 +988,7 @@ class BackupApp:
                 self.update_log(f"Error: invalid schedule format for '{profile_name}': '{sched}'")
         elif sched == "Custom":
             custom = profile.get("custom_time", "")
-            ok, err = self._validate_custom_time(custom)
+            ok, err = validate_custom_time(custom)
             if not ok:
                 self.update_log(f"Error: {err} for '{profile_name}': '{custom}'")
             elif ":" in custom:
@@ -1175,7 +1003,7 @@ class BackupApp:
             if not weekly_days:
                 self.update_log(f"Error: no days selected for weekly schedule for '{profile_name}'")
                 return
-            ok, err = self._validate_hhmm(weekly_time)
+            ok, err = validate_hhmm(weekly_time)
             if not ok:
                 self.update_log(f"Error: {err} for '{profile_name}': '{weekly_time}'")
                 return
@@ -1185,7 +1013,6 @@ class BackupApp:
                 )
             days_str = ", ".join(weekly_days)
             self.update_log(f"Schedule (profile '{profile_name}'): weekly on {days_str} at {weekly_time}")
-
 
     def run_scheduler(self):
         try:
@@ -1368,7 +1195,6 @@ class BackupApp:
             return free_bytes.value
         except Exception:
             return None
-
 
 def _tk_exception_handler(exc_type, exc_value, exc_traceback):
     log_exit_or_crash("Unhandled Tkinter exception", (exc_type, exc_value, exc_traceback))
