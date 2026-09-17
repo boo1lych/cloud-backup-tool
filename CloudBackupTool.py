@@ -401,6 +401,7 @@ class BackupApp:
 
         self.profile_widgets[profile_name] = widgets
         self.update_profile_status(profile_name)
+        self._update_custom_time_hint(profile_name)
 
     # =========================================================
     # ================= PROFILE STATUS / STATE ================
@@ -639,6 +640,7 @@ class BackupApp:
     def on_custom_time_changed(self, profile_name):
         self.save_profile_settings(profile_name)
         self.setup_schedule()
+        self._update_custom_time_hint(profile_name)
 
     def schedule_changed(self, profile_name):
         w = self.profile_widgets[profile_name]
@@ -651,6 +653,7 @@ class BackupApp:
             w["custom_hint_label"].grid_remove()
         self.save_profile_settings(profile_name)
         self.setup_schedule()
+        self._update_custom_time_hint(profile_name)
         self.update_tray_menu()
 
     def toggle_start_minimized(self):
@@ -1011,35 +1014,70 @@ class BackupApp:
             sched = profile.get("backup_schedule", "None")
             if sched == "None":
                 continue
-            self._register_schedule(profile_name, profile)
+            try:
+                self._register_schedule(profile_name, profile)
+            except Exception as e:
+                self.update_log(f"Error registering schedule for '{profile_name}': {e}")
 
         self.sched_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.sched_thread.start()
 
+    def _validate_custom_time(self, custom):
+        """Проверяет значение custom_time. Возвращает (ok, error_message)."""
+        custom = custom.strip()
+        if ":" in custom:
+            parts = custom.split(":")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                h, m = int(parts[0]), int(parts[1])
+                if 0 <= h <= 23 and 0 <= m <= 59:
+                    return True, ""
+                return False, "Time out of range (use 00:00 - 23:59)"
+            return False, "Invalid time format (use HH:MM)"
+        if custom.isdigit():
+            return True, ""
+        if not custom:
+            return False, "Value is empty (use HH:MM or minutes)"
+        return False, "Invalid value (use HH:MM or minutes)"
+
+    def _update_custom_time_hint(self, profile_name):
+        """Обновляет подсказку под полем Custom time: серая при валидном значении, красная при ошибке."""
+        w = self.profile_widgets.get(profile_name)
+        if not w or "custom_hint_label" not in w:
+            return
+        profile = self.settings["profiles"].get(profile_name, {})
+        if profile.get("backup_schedule") != "Custom":
+            return
+        custom = profile.get("custom_time", "")
+        ok, err = self._validate_custom_time(custom)
+        if ok:
+            w["custom_hint_label"].config(
+                text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)",
+                fg="gray",
+            )
+        else:
+            w["custom_hint_label"].config(text=err, fg="red")
+
     def _register_schedule(self, profile_name, profile):
         sched = profile.get("backup_schedule", "None")
         if sched.startswith("Daily"):
-            time_str = sched.split()[1]
-            schedule.every().day.at(time_str).do(self.scheduled_backup, profile_name)
-            self.update_log(f"Schedule (profile '{profile_name}'): daily at {time_str}")
+            parts = sched.split()
+            if len(parts) >= 2:
+                time_str = parts[1]
+                schedule.every().day.at(time_str).do(self.scheduled_backup, profile_name)
+                self.update_log(f"Schedule (profile '{profile_name}'): daily at {time_str}")
+            else:
+                self.update_log(f"Error: invalid schedule format for '{profile_name}': '{sched}'")
         elif sched == "Custom":
             custom = profile.get("custom_time", "")
-            if ":" in custom:
-                parts = custom.split(":")
-                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    h, m = int(parts[0]), int(parts[1])
-                    if 0 <= h <= 23 and 0 <= m <= 59:
-                        schedule.every().day.at(custom).do(self.scheduled_backup, profile_name)
-                        self.update_log(f"Schedule (profile '{profile_name}'): daily at {custom}")
-                    else:
-                        self.update_log(f"Error: time out of range for '{profile_name}': '{custom}'")
-                else:
-                    self.update_log(f"Error: invalid time format for '{profile_name}': '{custom}'")
-            elif custom.isdigit():
+            ok, err = self._validate_custom_time(custom)
+            if not ok:
+                self.update_log(f"Error: {err} for '{profile_name}': '{custom}'")
+            elif ":" in custom:
+                schedule.every().day.at(custom).do(self.scheduled_backup, profile_name)
+                self.update_log(f"Schedule (profile '{profile_name}'): daily at {custom}")
+            else:
                 schedule.every(int(custom)).minutes.do(self.scheduled_backup, profile_name)
                 self.update_log(f"Schedule (profile '{profile_name}'): every {custom} minutes")
-            else:
-                self.update_log(f"Error: invalid custom_time for '{profile_name}': '{custom}'")
 
     def run_scheduler(self):
         try:
