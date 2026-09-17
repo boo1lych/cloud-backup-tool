@@ -722,7 +722,11 @@ class BackupApp:
         if not backup_dir:
             return False
         try:
-            return os.path.exists(backup_dir)
+            if not os.path.exists(backup_dir):
+                return False
+            if not os.access(backup_dir, os.W_OK):
+                return False
+            return True
         except Exception:
             return False
 
@@ -822,6 +826,7 @@ class BackupApp:
             "files_skipped": 0,
             "total_size_mb": 0,
             "errors": 0,
+            "total_size_mb": 0,
         }
         all_copied_files = []
 
@@ -1027,6 +1032,11 @@ class BackupApp:
         self.root.after(0, self._try_start_scheduled_backup, profile_name)
 
     def _try_start_scheduled_backup(self, profile_name):
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
         profile = self.settings["profiles"].get(profile_name, {})
         if not profile.get("enabled", False):
             return
