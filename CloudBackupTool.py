@@ -826,7 +826,6 @@ class BackupApp:
             "files_skipped": 0,
             "total_size_mb": 0,
             "errors": 0,
-            "total_size_mb": 0,
         }
         all_copied_files = []
 
