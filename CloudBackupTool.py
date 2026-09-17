@@ -16,6 +16,7 @@ import fnmatch
 import sv_ttk
 import traceback
 import atexit
+import queue
 
 MAX_COPIED_LIST = 10000
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -153,8 +154,9 @@ class BackupApp:
 
         self.profile_tabs = {}
         self.profile_widgets = {}
-
+        self.log_queue = queue.Queue()
         self.create_widgets()
+        self.root.after(1000, self._flush_log_ui)
         self.create_tray_icon()
 
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
@@ -722,16 +724,24 @@ class BackupApp:
     def update_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_line = f"[{timestamp}] {message}\n"
-        self.root.after(0, self._insert_log_ui, log_line)
+        self.log_queue.put(log_line)
         if self.settings["global"].get("log_to_file", False):
             self.logger.info(message)
-
-    def _insert_log_ui(self, log_line):
+    def _flush_log_ui(self):
+        """Периодически забирает накопленные строки лога из очереди и вставляет их в виджет одним пакетом."""
+        lines = []
         try:
-            self.log_display.insert(tk.END, log_line)
-            self.log_display.see(tk.END)
-        except tk.TclError:
+            while True:
+                lines.append(self.log_queue.get_nowait())
+        except queue.Empty:
             pass
+        if lines and hasattr(self, "log_display"):
+            try:
+                self.log_display.insert(tk.END, "".join(lines))
+                self.log_display.see(tk.END)
+            except tk.TclError:
+                pass
+        self.root.after(1000, self._flush_log_ui)
 
     # =========================================================
     # ====================== BACKUP ===========================
