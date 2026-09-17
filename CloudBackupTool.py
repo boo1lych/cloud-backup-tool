@@ -17,6 +17,7 @@ import traceback
 import atexit
 import queue
 from backup_logic import validate_custom_time, validate_hhmm, backup_saves, is_reparse_point
+from error_log import error_logger
 
 MAX_COPIED_LIST = 10000
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -145,6 +146,7 @@ class BackupApp:
 
         self.create_widgets()
         self.root.after(1000, self._flush_log_ui)
+        self.root.after(2000, self._update_error_indicator)  # Запуск проверки индикатора
         self.create_tray_icon()
 
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
@@ -187,17 +189,38 @@ class BackupApp:
                    command=self.stop_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(gbtn_frame, text="✕ Exit",
                    command=self.exit_app, width=15).pack(side=tk.LEFT)
+        
+        # Индикатор ошибок (справа)
+        self.error_indicator = tk.Label(gbtn_frame, text="", fg="red", font=("Arial", 10, "bold"), cursor="hand2")
+        self.error_indicator.pack(side=tk.RIGHT, padx=(20, 0))
+        self.error_indicator.bind("<Button-1>", lambda e: self._open_error_summary())
+
+        # === Кнопка-переключатель блока профилей ===
+        self.profiles_collapsed_var = tk.BooleanVar(
+            value=self.settings["global"].get("profiles_collapsed", False)
+        )
+        self.profiles_toggle_btn = tk.Label(
+            main_frame,
+            text="",
+            font=("Arial", 10, "bold"),
+            cursor="hand2",
+            foreground="#0066cc",
+        )
+
+        self.profiles_toggle_btn.pack(fill=tk.X, pady=(0, 5), anchor=tk.W, padx=(5, 0))
+        self.profiles_toggle_btn.bind("<Button-1>", lambda e: self.toggle_profiles_visibility())
+        self._update_profiles_toggle_text()
 
         # === Панель управления профилями ===
-        profiles_toolbar = ttk.Frame(main_frame)
-        profiles_toolbar.pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(profiles_toolbar, text="New Profile",
+        self.profiles_toolbar = ttk.Frame(main_frame)
+        self.profiles_toolbar.pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(self.profiles_toolbar, text="New Profile",
                    command=self.new_profile, width=15).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(profiles_toolbar, text="Rename",
+        ttk.Button(self.profiles_toolbar, text="Rename",
                    command=self.rename_profile, width=15).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(profiles_toolbar, text="Duplicate",
+        ttk.Button(self.profiles_toolbar, text="Duplicate",
                    command=self.duplicate_profile, width=15).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(profiles_toolbar, text="Delete",
+        ttk.Button(self.profiles_toolbar, text="Delete",
                 command=self.delete_profile, width=15).pack(side=tk.RIGHT)
 
         # === Notebook (вкладки профилей) ===
@@ -208,22 +231,27 @@ class BackupApp:
             self._create_profile_tab(profile_name)
 
         # === Глобальные настройки ===
-        global_frame = ttk.LabelFrame(main_frame, text="Global Settings", padding=10)
-        global_frame.pack(fill=tk.X, pady=(0, 10))
+        self.global_frame = ttk.LabelFrame(main_frame, text="Global Settings", padding=10)
+        self.global_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # Применяем начальное состояние сворачивания
+        if self.profiles_collapsed_var.get():
+            self.profiles_toolbar.pack_forget()
+            self.notebook.pack_forget()
         self.log_to_file_var = tk.BooleanVar(
             value=self.settings["global"].get("log_to_file", True)
         )
-        ttk.Checkbutton(global_frame, text="Save log to file",
+        ttk.Checkbutton(self.global_frame, text="Save log to file",
                         variable=self.log_to_file_var,
                         command=self.toggle_log_to_file).pack(side=tk.LEFT, padx=(0, 15))
         self.autorun_var = tk.BooleanVar(value=self.check_autorun())
-        ttk.Checkbutton(global_frame, text="Run at Windows startup",
+        ttk.Checkbutton(self.global_frame, text="Run at Windows startup",
                         variable=self.autorun_var,
                         command=self.toggle_autorun).pack(side=tk.LEFT, padx=(0, 15))
         self.start_minimized_var = tk.BooleanVar(
             value=self.settings["global"].get("start_minimized", False)
         )
-        ttk.Checkbutton(global_frame, text="Start minimized",
+        ttk.Checkbutton(self.global_frame, text="Start minimized",
                         variable=self.start_minimized_var,
                         command=self.toggle_start_minimized).pack(side=tk.LEFT)
 
@@ -239,24 +267,33 @@ class BackupApp:
         tab = ttk.Frame(self.notebook, padding=10)
         self.notebook.add(tab, text=profile_name)
         self.profile_tabs[profile_name] = tab
-
         profile_data = self.settings["profiles"][profile_name]
         widgets = {}
 
-        # === Панель управления профилем (switch + кнопки + статус) ===
-        ctrl_frame = ttk.LabelFrame(tab, text="Profile Control", padding=10)
+        # === Вложенный Notebook для профиля ===
+        profile_notebook = ttk.Notebook(tab)
+        profile_notebook.pack(fill=tk.BOTH, expand=True)
+
+        main_tab = ttk.Frame(profile_notebook, padding=10)
+        advanced_tab = ttk.Frame(profile_notebook, padding=10)
+        profile_notebook.add(main_tab, text="Main")
+        profile_notebook.add(advanced_tab, text="Advanced")
+
+        # ==========================================
+        # === Вкладка Main ===
+        # ==========================================
+        # === Панель управления профилем ===
+        ctrl_frame = ttk.LabelFrame(main_tab, text="Profile Control", padding=10)
         ctrl_frame.pack(fill=tk.X, pady=(0, 10))
         ctrl_inner = ttk.Frame(ctrl_frame)
         ctrl_inner.pack(fill=tk.X)
 
-        # Switch (Enabled)
         widgets["enabled_var"] = tk.BooleanVar(value=profile_data.get("enabled", False))
         ttk.Checkbutton(ctrl_inner, text="Enabled",
                         variable=widgets["enabled_var"],
                         command=lambda pn=profile_name: self.on_profile_enabled_changed(pn)
                         ).pack(side=tk.LEFT, padx=(0, 20))
 
-        # Кнопки Start/Stop профиля
         widgets["start_btn"] = ttk.Button(ctrl_inner, text="► Start",
                                           command=lambda pn=profile_name: self.start_profile_backup(pn),
                                           width=12)
@@ -266,158 +303,208 @@ class BackupApp:
                                          width=12, state=tk.DISABLED)
         widgets["stop_btn"].pack(side=tk.LEFT, padx=(0, 20))
 
-        # Статус профиля
         widgets["status_label"] = ttk.Label(ctrl_inner, text="Idle", foreground="gray")
         widgets["status_label"].pack(side=tk.LEFT)
 
         # === Source Directories ===
-        source_frame = ttk.LabelFrame(tab, text="Source Directories", padding=10)
+        source_frame = ttk.LabelFrame(main_tab, text="Source Directories", padding=10)
         source_frame.pack(fill=tk.X, pady=(0, 10))
-        widgets["source_listbox"] = tk.Listbox(
-            source_frame, selectmode=tk.EXTENDED, height=4, width=80
-        )
+        widgets["source_listbox"] = tk.Listbox(source_frame, selectmode=tk.EXTENDED, height=4, width=80)
         widgets["source_listbox"].pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         for path in profile_data.get("source_dirs", []):
             widgets["source_listbox"].insert(tk.END, path)
+
         source_btns = ttk.Frame(source_frame)
         source_btns.pack(side=tk.RIGHT, fill=tk.Y)
-        ttk.Button(source_btns, text="Add...",
-                   command=lambda pn=profile_name: self.add_source(pn),
-                   width=12).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(source_btns, text="Remove",
-                   command=lambda pn=profile_name: self.remove_source(pn),
-                   width=12).pack(fill=tk.X)
+        ttk.Button(source_btns, text="Add...", command=lambda pn=profile_name: self.add_source(pn), width=12).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(source_btns, text="Remove", command=lambda pn=profile_name: self.remove_source(pn), width=12).pack(fill=tk.X)
 
         # === Backup Destination ===
-        dest_frame = ttk.LabelFrame(tab, text="Backup Destination", padding=10)
+        dest_frame = ttk.LabelFrame(main_tab, text="Backup Destination", padding=10)
         dest_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(dest_frame, text="Directory:").grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 10)
-        )
+        ttk.Label(dest_frame, text="Directory:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
         widgets["backup_entry"] = ttk.Entry(dest_frame, width=60)
         widgets["backup_entry"].insert(0, profile_data.get("backup_dir", ""))
         widgets["backup_entry"].grid(row=0, column=1, padx=(0, 10), sticky=tk.EW)
-        ttk.Button(dest_frame, text="Browse...",
-                   command=lambda pn=profile_name: self.browse_backup(pn)).grid(row=0, column=2)
+        ttk.Button(dest_frame, text="Browse...", command=lambda pn=profile_name: self.browse_backup(pn)).grid(row=0, column=2)
         dest_frame.columnconfigure(1, weight=1)
 
         # === Profile Settings ===
-        settings_frame = ttk.LabelFrame(tab, text="Profile Settings", padding=10)
+        settings_frame = ttk.LabelFrame(main_tab, text="Profile Settings", padding=10)
         settings_frame.pack(fill=tk.X, pady=(0, 10))
         left_col = ttk.Frame(settings_frame)
         left_col.grid(row=0, column=0, sticky=tk.NW, padx=(0, 20))
 
-        widgets["skip_links_var"] = tk.BooleanVar(
-            value=profile_data.get("skip_links", True)
-        )
+        widgets["skip_links_var"] = tk.BooleanVar(value=profile_data.get("skip_links", True))
         ttk.Checkbutton(left_col, text="Skip symbolic links/junctions",
                         variable=widgets["skip_links_var"],
-                        command=lambda pn=profile_name: self.save_profile_settings(pn)
-                        ).pack(anchor=tk.W, pady=2)
+                        command=lambda pn=profile_name: self.save_profile_settings(pn)).pack(anchor=tk.W, pady=2)
 
-        widgets["auto_start_backup_var"] = tk.BooleanVar(
-            value=profile_data.get("auto_start_backup", False)
-        )
+        widgets["auto_start_backup_var"] = tk.BooleanVar(value=profile_data.get("auto_start_backup", False))
         ttk.Checkbutton(left_col, text="Run backup immediately on app start",
                         variable=widgets["auto_start_backup_var"],
-                        command=lambda pn=profile_name: self.save_profile_settings(pn)
-                        ).pack(anchor=tk.W, pady=2)
+                        command=lambda pn=profile_name: self.save_profile_settings(pn)).pack(anchor=tk.W, pady=2)
 
         right_col = ttk.Frame(settings_frame)
         right_col.grid(row=0, column=1, sticky=tk.NW)
 
-        ttk.Label(right_col, text="Backup Schedule:").grid(
-            row=0, column=0, sticky=tk.W, pady=(0, 5)
-        )
-        widgets["schedule_var"] = tk.StringVar(
-            value=profile_data.get("backup_schedule", "None")
-        )
-        widgets["schedule_menu"] = ttk.Combobox(
-            right_col, textvariable=widgets["schedule_var"],
-            values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly"],
-            state="readonly", width=15
-        )
+        ttk.Label(right_col, text="Backup Schedule:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        widgets["schedule_var"] = tk.StringVar(value=profile_data.get("backup_schedule", "None"))
+        widgets["schedule_menu"] = ttk.Combobox(right_col, textvariable=widgets["schedule_var"],
+                                                values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly"],
+                                                state="readonly", width=15)
         widgets["schedule_menu"].grid(row=0, column=1, padx=(0, 10))
-        widgets["schedule_menu"].bind(
-            "<<ComboboxSelected>>",
-            lambda e, pn=profile_name: self.schedule_changed(pn)
-        )
+        widgets["schedule_menu"].bind("<<ComboboxSelected>>", lambda e, pn=profile_name: self.schedule_changed(pn))
 
         widgets["custom_time_entry"] = ttk.Entry(right_col, width=10)
         widgets["custom_time_entry"].insert(0, profile_data.get("custom_time", ""))
         widgets["custom_time_entry"].grid(row=0, column=2, padx=(0, 10))
-        widgets["custom_time_entry"].bind(
-            "<FocusOut>", lambda e, pn=profile_name: self.on_custom_time_changed(pn)
-        )
-        widgets["custom_time_entry"].bind(
-            "<Return>", lambda e, pn=profile_name: self.on_custom_time_changed(pn)
-        )
+        widgets["custom_time_entry"].bind("<FocusOut>", lambda e, pn=profile_name: self.on_custom_time_changed(pn))
+        widgets["custom_time_entry"].bind("<Return>", lambda e, pn=profile_name: self.on_custom_time_changed(pn))
         if profile_data.get("backup_schedule") != "Custom":
             widgets["custom_time_entry"].grid_remove()
 
         widgets["weekly_time_entry"] = ttk.Entry(right_col, width=10)
         widgets["weekly_time_entry"].insert(0, profile_data.get("weekly_time", "23:00"))
         widgets["weekly_time_entry"].grid(row=0, column=2, padx=(0, 10))
-        widgets["weekly_time_entry"].bind(
-            "<FocusOut>", lambda e, pn=profile_name: self.on_weekly_settings_changed(pn)
-        )
-        widgets["weekly_time_entry"].bind(
-            "<Return>", lambda e, pn=profile_name: self.on_weekly_settings_changed(pn)
-        )
+        widgets["weekly_time_entry"].bind("<FocusOut>", lambda e, pn=profile_name: self.on_weekly_settings_changed(pn))
+        widgets["weekly_time_entry"].bind("<Return>", lambda e, pn=profile_name: self.on_weekly_settings_changed(pn))
         if profile_data.get("backup_schedule") != "Weekly":
             widgets["weekly_time_entry"].grid_remove()
 
-        widgets["custom_hint_label"] = tk.Label(
-            right_col,
-            text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)",
-            fg="gray"
-        )
-        widgets["custom_hint_label"].grid(row=1, column=1, columnspan=2,
-                                        sticky=tk.W, pady=(0, 5))
+        widgets["custom_hint_label"] = tk.Label(right_col, text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)", fg="gray")
+        widgets["custom_hint_label"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
         if profile_data.get("backup_schedule") != "Custom":
             widgets["custom_hint_label"].grid_remove()
 
-        widgets["weekly_hint_label"] = tk.Label(
-            right_col,
-            text="Time format: HH:MM (e.g., 23:00)",
-            fg="gray"
-        )
-        widgets["weekly_hint_label"].grid(row=1, column=1, columnspan=2,
-                                        sticky=tk.W, pady=(0, 5))
+        widgets["weekly_hint_label"] = tk.Label(right_col, text="Time format: HH:MM (e.g., 23:00)", fg="gray")
+        widgets["weekly_hint_label"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
         if profile_data.get("backup_schedule") != "Weekly":
             widgets["weekly_hint_label"].grid_remove()
 
         widgets["weekly_days_frame"] = ttk.Frame(right_col)
-        widgets["weekly_days_frame"].grid(row=2, column=0, columnspan=3,
-                                        sticky=tk.W, pady=(0, 5))
+        widgets["weekly_days_frame"].grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(0, 5))
         widgets["weekly_day_vars"] = {}
         selected_days = profile_data.get("weekly_days", ["Monday"])
-        for day in WEEK_DAYS:
+        for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]:
             var = tk.BooleanVar(value=day in selected_days)
             widgets["weekly_day_vars"][day] = var
-            ttk.Checkbutton(
-                widgets["weekly_days_frame"],
-                text=day[:3],
-                variable=var,
-                command=lambda pn=profile_name: self.on_weekly_settings_changed(pn)
-            ).pack(side=tk.LEFT, padx=(0, 5))
+            ttk.Checkbutton(widgets["weekly_days_frame"], text=day[:3], variable=var,
+                            command=lambda pn=profile_name: self.on_weekly_settings_changed(pn)).pack(side=tk.LEFT, padx=(0, 5))
         if profile_data.get("backup_schedule") != "Weekly":
             widgets["weekly_days_frame"].grid_remove()
 
-        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(
-            row=3, column=0, sticky=tk.W, pady=(10, 0)
-        )
+        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=3, column=0, sticky=tk.W, pady=(10, 0))
         widgets["exclude_entry"] = ttk.Entry(right_col, width=40)
         widgets["exclude_entry"].insert(0, profile_data.get("exclude_patterns", ""))
-        widgets["exclude_entry"].grid(row=3, column=1, columnspan=2,
-                                    sticky=tk.EW, pady=(10, 0))
-        widgets["exclude_hint_label"] = tk.Label(
-            right_col, text="Masks: *$*.txt, ~$, *.tmp, logs/*", fg="gray"
-        )
-        widgets["exclude_hint_label"].grid(row=4, column=1, columnspan=2,
-                                            sticky=tk.W, pady=(0, 5))
+        widgets["exclude_entry"].grid(row=3, column=1, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        widgets["exclude_hint_label"] = tk.Label(right_col, text="Masks: *$*.txt, ~$, *.tmp, logs/*", fg="gray")
+        widgets["exclude_hint_label"].grid(row=4, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
 
+        # ==========================================
+        # === Вкладка Advanced ===
+        # ==========================================
+        # --- Process Control ---
+        pc_frame = ttk.LabelFrame(advanced_tab, text="Process Control", padding=10)
+        pc_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        pc = profile_data.get("process_control", {})
+        widgets["pc_enabled_var"] = tk.BooleanVar(value=pc.get("enabled", False))
+        ttk.Checkbutton(pc_frame, text="Enable process control", variable=widgets["pc_enabled_var"],
+                        command=lambda pn=profile_name: self.save_profile_settings(pn)).pack(anchor=tk.W, pady=(0, 10))
+
+        ttk.Label(pc_frame, text="Processes to close before backup:").pack(anchor=tk.W)
+        widgets["pc_close_listbox"] = tk.Listbox(pc_frame, height=4, width=40)
+        widgets["pc_close_listbox"].pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        for proc in pc.get("close_before", []):
+            widgets["pc_close_listbox"].insert(tk.END, proc)
+        
+        pc_btns = ttk.Frame(pc_frame)
+        pc_btns.pack(side=tk.LEFT, fill=tk.Y)
+        ttk.Button(pc_btns, text="Add...", command=lambda pn=profile_name: self.add_process_to_close(pn), width=10).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(pc_btns, text="Remove", command=lambda pn=profile_name: self.remove_process_to_close(pn), width=10).pack(fill=tk.X)
+
+        pc_opts = ttk.Frame(pc_frame)
+        pc_opts.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Label(pc_opts, text="Close mode:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        widgets["pc_close_mode_var"] = tk.StringVar(value=pc.get("close_mode", "graceful_then_force"))
+        ttk.Combobox(pc_opts, textvariable=widgets["pc_close_mode_var"], values=["graceful", "force", "graceful_then_force"],
+                     state="readonly", width=20).grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        ttk.Label(pc_opts, text="Graceful timeout (sec):").grid(row=1, column=0, sticky=tk.W, pady=2)
+        widgets["pc_graceful_timeout_var"] = tk.StringVar(value=str(pc.get("graceful_timeout_sec", 10)))
+        ttk.Entry(pc_opts, textvariable=widgets["pc_graceful_timeout_var"], width=10).grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        ttk.Label(pc_opts, text="On close failure:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        widgets["pc_on_close_failure_var"] = tk.StringVar(value=pc.get("on_close_failure", "abort"))
+        ttk.Combobox(pc_opts, textvariable=widgets["pc_on_close_failure_var"], values=["abort", "continue"],
+                     state="readonly", width=20).grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        ttk.Label(pc_opts, text="Restore after:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        widgets["pc_restore_after_var"] = tk.StringVar(value=pc.get("restore_after", "only_if_was_running"))
+        ttk.Combobox(pc_opts, textvariable=widgets["pc_restore_after_var"], values=["always", "only_if_was_running", "never"],
+                     state="readonly", width=20).grid(row=3, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        # --- Retry Settings ---
+        retry_frame = ttk.LabelFrame(advanced_tab, text="Retry Settings", padding=10)
+        retry_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        retry = profile_data.get("retry", {})
+        widgets["retry_enabled_var"] = tk.BooleanVar(value=retry.get("enabled", False))
+        ttk.Checkbutton(retry_frame, text="Enable retry", variable=widgets["retry_enabled_var"],
+                        command=lambda pn=profile_name: self.save_profile_settings(pn)).pack(anchor=tk.W, pady=(0, 10))
+
+        retry_opts = ttk.Frame(retry_frame)
+        retry_opts.pack(fill=tk.X)
+        
+        ttk.Label(retry_opts, text="Max attempts:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        widgets["retry_max_attempts_var"] = tk.StringVar(value=str(retry.get("max_attempts", 3)))
+        ttk.Entry(retry_opts, textvariable=widgets["retry_max_attempts_var"], width=10).grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        ttk.Label(retry_opts, text="Interval (seconds):").grid(row=1, column=0, sticky=tk.W, pady=2)
+        widgets["retry_interval_seconds_var"] = tk.StringVar(value=str(retry.get("interval_seconds", 300)))
+        ttk.Entry(retry_opts, textvariable=widgets["retry_interval_seconds_var"], width=10).grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        ttk.Label(retry_opts, text="Retry on:").grid(row=0, column=2, sticky=tk.W, padx=(20, 0), pady=2)
+        widgets["retry_on_vars"] = {}
+        retry_on_options = ["disk_unavailable", "process_close_failed", "copy_errors", "low_disk_space", "source_missing", "timeout_exceeded"]
+        retry_on_labels = ["Disk unavailable", "Process close failed", "Copy errors", "Low disk space", "Source missing", "Timeout exceeded"]
+        retry_on_list = retry.get("retry_on", [])
+        
+        for i, (opt, label) in enumerate(zip(retry_on_options, retry_on_labels)):
+            var = tk.BooleanVar(value=opt in retry_on_list)
+            widgets["retry_on_vars"][opt] = var
+            row = i // 2
+            col = 2 + (i % 2)
+            ttk.Checkbutton(retry_opts, text=label, variable=var,
+                            command=lambda pn=profile_name: self.save_profile_settings(pn)).grid(row=row, column=col, sticky=tk.W, padx=(20, 0), pady=2)
+
+        ttk.Label(retry_frame, text="On total failure:").pack(anchor=tk.W, pady=(10, 5))
+        widgets["retry_failure_listbox"] = tk.Listbox(retry_frame, height=4, width=60)
+        widgets["retry_failure_listbox"].pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        # Храним действия в памяти виджета
+        widgets["retry_on_total_failure_actions"] = retry.get("on_total_failure", [])
+
+        failure_btns = ttk.Frame(retry_frame)
+        failure_btns.pack(side=tk.LEFT, fill=tk.Y)
+        ttk.Button(failure_btns, text="Add...", command=lambda pn=profile_name: self.open_action_dialog(pn, None), width=12).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(failure_btns, text="Edit...", command=lambda pn=profile_name: self.open_action_dialog(pn, "selected"), width=12).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(failure_btns, text="Remove", command=lambda pn=profile_name: self.remove_failure_action(pn), width=12).pack(fill=tk.X)
+
+        # --- Total Timeout ---
+        timeout_frame = ttk.LabelFrame(advanced_tab, text="Total Timeout", padding=10)
+        timeout_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(timeout_frame, text="Timeout (minutes):").pack(side=tk.LEFT, padx=(0, 10))
+        widgets["total_timeout_minutes_var"] = tk.StringVar(value=str(profile_data.get("total_timeout_minutes", 0)))
+        ttk.Entry(timeout_frame, textvariable=widgets["total_timeout_minutes_var"], width=10).pack(side=tk.LEFT)
+        ttk.Label(timeout_frame, text="(0 = no timeout)", foreground="gray").pack(side=tk.LEFT, padx=(10, 0))
+
+        # Сохраняем виджеты ДО вызова методов, которые их используют
         self.profile_widgets[profile_name] = widgets
+        self._update_failure_listbox(profile_name)
         self.update_profile_status(profile_name)
         self._update_custom_time_hint(profile_name)
 
@@ -605,6 +692,8 @@ class BackupApp:
             return
         w = self.profile_widgets[profile_name]
         p = self.settings["profiles"][profile_name]
+        
+        # Main tab
         p["source_dirs"] = list(w["source_listbox"].get(0, tk.END))
         p["backup_dir"] = w["backup_entry"].get()
         p["skip_links"] = w["skip_links_var"].get()
@@ -615,6 +704,29 @@ class BackupApp:
         p["auto_start_backup"] = w["auto_start_backup_var"].get()
         p["weekly_time"] = w["weekly_time_entry"].get()
         p["weekly_days"] = [day for day, var in w["weekly_day_vars"].items() if var.get()]
+        
+        # Advanced tab: Process Control
+        p["process_control"] = {
+            "enabled": w["pc_enabled_var"].get(),
+            "close_before": list(w["pc_close_listbox"].get(0, tk.END)),
+            "close_mode": w["pc_close_mode_var"].get(),
+            "graceful_timeout_sec": int(w["pc_graceful_timeout_var"].get() or 10),
+            "on_close_failure": w["pc_on_close_failure_var"].get(),
+            "restore_after": w["pc_restore_after_var"].get()
+        }
+        
+        # Advanced tab: Retry Settings
+        retry_on = [opt for opt, var in w["retry_on_vars"].items() if var.get()]
+        p["retry"] = {
+            "enabled": w["retry_enabled_var"].get(),
+            "max_attempts": int(w["retry_max_attempts_var"].get() or 3),
+            "interval_seconds": int(w["retry_interval_seconds_var"].get() or 300),
+            "retry_on": retry_on,
+            "on_total_failure": w.get("retry_on_total_failure_actions", [])
+        }
+        
+        # Advanced tab: Total Timeout
+        p["total_timeout_minutes"] = int(w["total_timeout_minutes_var"].get() or 0)
 
     def save_profile_settings(self, profile_name):
         self._sync_profile_widgets_to_settings(profile_name)
@@ -639,6 +751,126 @@ class BackupApp:
         for idx in reversed(selected):
             w["source_listbox"].delete(idx)
         self.save_profile_settings(profile_name)
+
+    def add_process_to_close(self, profile_name):
+        proc = simpledialog.askstring("Add Process", "Enter process name (e.g., OUTLOOK.EXE):", parent=self.root)
+        if proc:
+            proc = proc.strip().upper()
+            w = self.profile_widgets[profile_name]
+            current = list(w["pc_close_listbox"].get(0, tk.END))
+            if proc not in current:
+                w["pc_close_listbox"].insert(tk.END, proc)
+                self.save_profile_settings(profile_name)
+
+    def remove_process_to_close(self, profile_name):
+        w = self.profile_widgets[profile_name]
+        selected = list(w["pc_close_listbox"].curselection())
+        for idx in reversed(selected):
+            w["pc_close_listbox"].delete(idx)
+        self.save_profile_settings(profile_name)
+
+    def _update_failure_listbox(self, profile_name):
+        w = self.profile_widgets[profile_name]
+        w["retry_failure_listbox"].delete(0, tk.END)
+        for action in w.get("retry_on_total_failure_actions", []):
+            if action.get("action") == "run_script":
+                w["retry_failure_listbox"].insert(tk.END, f"run_script: {action.get('script_path', '')}")
+            elif action.get("action") == "show_message":
+                w["retry_failure_listbox"].insert(tk.END, f"show_message: {action.get('message', '')}")
+
+    def remove_failure_action(self, profile_name):
+        w = self.profile_widgets[profile_name]
+        selected = list(w["retry_failure_listbox"].curselection())
+        actions = w.get("retry_on_total_failure_actions", [])
+        for idx in reversed(selected):
+            if idx < len(actions):
+                actions.pop(idx)
+                w["retry_failure_listbox"].delete(idx)
+        self.save_profile_settings(profile_name)
+
+    def open_action_dialog(self, profile_name, edit_index):
+        w = self.profile_widgets[profile_name]
+        actions = w.get("retry_on_total_failure_actions", [])
+        
+        # Если edit_index == "selected", берём индекс из listbox
+        if edit_index == "selected":
+            sel = w["retry_failure_listbox"].curselection()
+            if not sel:
+                return
+            edit_index = sel[0]
+            existing = actions[edit_index]
+        else:
+            existing = {"action": "run_script", "script_path": "", "log_output": True, "message": "Backup failed after all retries"}
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Action Settings")
+        dialog.geometry("400x250")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Action type:").pack(anchor=tk.W, padx=10, pady=(10, 0))
+        action_type_var = tk.StringVar(value=existing.get("action", "run_script"))
+        type_cb = ttk.Combobox(dialog, textvariable=action_type_var, values=["run_script", "show_message"], state="readonly", width=20)
+        type_cb.pack(anchor=tk.W, padx=10, pady=(0, 10))
+
+        frame_script = ttk.LabelFrame(dialog, text="run_script", padding=10)
+        frame_script.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(frame_script, text="Script path:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        script_path_var = tk.StringVar(value=existing.get("script_path", ""))
+        ttk.Entry(frame_script, textvariable=script_path_var, width=30).grid(row=0, column=1, padx=5, pady=2)
+        ttk.Button(frame_script, text="Browse...", command=lambda: self._browse_script(script_path_var)).grid(row=0, column=2, pady=2)
+        
+        log_output_var = tk.BooleanVar(value=existing.get("log_output", True))
+        ttk.Checkbutton(frame_script, text="Log output to backup log", variable=log_output_var).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+
+        frame_msg = ttk.LabelFrame(dialog, text="show_message", padding=10)
+        frame_msg.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(frame_msg, text="Message:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        message_var = tk.StringVar(value=existing.get("message", "Backup failed after all retries"))
+        ttk.Entry(frame_msg, textvariable=message_var, width=40).grid(row=0, column=1, padx=5, pady=2)
+
+        def update_visibility(*args):
+            if action_type_var.get() == "run_script":
+                frame_script.pack(fill=tk.X, padx=10, pady=5)
+                frame_msg.pack_forget()
+            else:
+                frame_script.pack_forget()
+                frame_msg.pack(fill=tk.X, padx=10, pady=5)
+        
+        action_type_var.trace_add("write", update_visibility)
+        update_visibility()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        def on_ok():
+            new_action = {"action": action_type_var.get()}
+            if new_action["action"] == "run_script":
+                new_action["script_path"] = script_path_var.get()
+                new_action["log_output"] = log_output_var.get()
+            else:
+                new_action["message"] = message_var.get()
+            
+            if edit_index is not None and isinstance(edit_index, int):
+                actions[edit_index] = new_action
+            else:
+                actions.append(new_action)
+            
+            w["retry_on_total_failure_actions"] = actions
+            self._update_failure_listbox(profile_name)
+            self.save_profile_settings(profile_name)
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT)
+
+    def _browse_script(self, string_var):
+        path = filedialog.askopenfilename(filetypes=[("Scripts", "*.bat *.ps1 *.exe"), ("All files", "*.*")])
+        if path:
+            string_var.set(path)
+
 
     def browse_backup(self, profile_name):
         w = self.profile_widgets[profile_name]
@@ -819,68 +1051,295 @@ class BackupApp:
         backup_dir = profile.get("backup_dir", "")
         skip_links = profile.get("skip_links", True)
         exclude_patterns_str = profile.get("exclude_patterns", "")
-
-        start_time = time.time()
-        total_stats = {
-            "files_copied": 0,
-            "files_skipped": 0,
-            "total_size_mb": 0,
-            "errors": 0,
-        }
-        all_copied_files = []
-
-        try:
-            for source_dir in source_dirs:
-                if state.get("stop_flag", False):
-                    break
-                stats = backup_saves(
-                    source_dir, backup_dir, skip_links, exclude_patterns_str,
-                    source_dirs, state, log=self.update_log
-                )
-                for key in total_stats:
-                    total_stats[key] += stats.get(key, 0)
-                new_files = stats.get("copied_files", [])
-                if len(all_copied_files) < MAX_COPIED_LIST:
-                    room = MAX_COPIED_LIST - len(all_copied_files)
-                    all_copied_files.extend(new_files[:room])
-                total_stats["total_copied_count"] = (
-                    total_stats.get("total_copied_count", 0) + len(new_files)
-                )
-
-            elapsed_time = time.time() - start_time
-            speed = (
-                total_stats["total_size_mb"] / elapsed_time
-                if elapsed_time > 0
-                else 0
-            )
-
+        
+        # Настройки retry
+        retry_config = profile.get("retry", {})
+        retry_enabled = retry_config.get("enabled", False)
+        max_attempts = retry_config.get("max_attempts", 3) if retry_enabled else 1
+        interval_seconds = retry_config.get("interval_seconds", 300)
+        retry_on = retry_config.get("retry_on", [])
+        on_total_failure = retry_config.get("on_total_failure", [])
+        
+        # Настройки process_control
+        pc_config = profile.get("process_control", {})
+        pc_enabled = pc_config.get("enabled", False)
+        close_before = pc_config.get("close_before", [])
+        close_mode = pc_config.get("close_mode", "graceful_then_force")
+        graceful_timeout = pc_config.get("graceful_timeout_sec", 10)
+        on_close_failure = pc_config.get("on_close_failure", "abort")
+        restore_after = pc_config.get("restore_after", "only_if_was_running")
+        
+        # Общий таймаут
+        total_timeout_minutes = profile.get("total_timeout_minutes", 0)
+        
+        # Словарь для хранения путей к exe закрытых процессов
+        closed_processes = {}  # {process_name: exe_path}
+        
+        for attempt in range(1, max_attempts + 1):
             if state.get("stop_flag", False):
-                self.update_log(f"[{profile_name}] Backup stopped.")
-            else:
-                msg = (
-                    f"[{profile_name}] Total files copied: {total_stats['files_copied']}\n"
-                    f"Total files skipped: {total_stats['files_skipped']}\n"
-                    f"Total size copied: {total_stats['total_size_mb']:.2f} MB\n"
-                    f"Errors occurred: {total_stats['errors']}\n"
-                    f"Time elapsed: {elapsed_time:.2f} seconds\n"
-                    f"Average speed: {speed:.2f} MB/s"
+                self.update_log(f"[{profile_name}] Backup stopped by user.")
+                break
+            
+            self.update_log(f"[{profile_name}] === Attempt {attempt}/{max_attempts} ===")
+            
+            # Закрываем процессы перед каждой попыткой
+            if pc_enabled and close_before:
+                self.update_log(f"[{profile_name}] Closing processes before backup...")
+                for proc_name in close_before:
+                    from process_manager import close_process
+                    success, exe_path = close_process(proc_name, mode=close_mode, timeout=graceful_timeout)
+                    if success:
+                        closed_processes[proc_name] = exe_path
+                        self.update_log(f"[{profile_name}] Closed: {proc_name}")
+                    else:
+                        self.update_log(f"[{profile_name}] Failed to close: {proc_name}")
+                        if on_close_failure == "abort":
+                            error_msg = f"Failed to close process '{proc_name}'"
+                            error_type = "process_close_failed"
+                            error_logger.log_error(profile_name, error_type, error_msg, attempt, max_attempts)
+                            self.update_log(f"[{profile_name}] Aborting due to process close failure.")
+                            
+                            # Выполняем действия при полном провале
+                            if attempt == max_attempts or not retry_enabled:
+                                self._execute_failure_actions(profile_name, on_total_failure)
+                            
+                            # Восстанавливаем процессы
+                            self._restore_processes(profile_name, closed_processes, restore_after)
+                            self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
+                            return
+                        else:
+                            self.update_log(f"[{profile_name}] Continuing despite process close failure.")
+            
+            # Выполняем бэкап с проверкой таймаута
+            start_time = time.time()
+            total_stats = {
+                "files_copied": 0,
+                "files_skipped": 0,
+                "total_size_mb": 0,
+                "errors": 0,
+            }
+            all_copied_files = []
+            timeout_exceeded = False
+            
+            try:
+                for source_dir in source_dirs:
+                    if state.get("stop_flag", False):
+                        break
+                    
+                    # Проверяем таймаут ДО копирования
+                    if total_timeout_minutes > 0:
+                        elapsed_minutes = (time.time() - start_time) / 60
+                        if elapsed_minutes >= total_timeout_minutes:
+                            timeout_exceeded = True
+                            self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).")
+                            break
+                    
+                    stats = backup_saves(
+                        source_dir, backup_dir, skip_links, exclude_patterns_str,
+                        source_dirs, state, log=self.update_log
+                    )
+                    for key in total_stats:
+                        total_stats[key] += stats.get(key, 0)
+                    new_files = stats.get("copied_files", [])
+                    if len(all_copied_files) < MAX_COPIED_LIST:
+                        room = MAX_COPIED_LIST - len(all_copied_files)
+                        all_copied_files.extend(new_files[:room])
+                    total_stats["total_copied_count"] = (
+                        total_stats.get("total_copied_count", 0) + len(new_files)
+                    )
+                    
+                    # Проверяем таймаут ПОСЛЕ копирования (на случай долгой операции)
+                    if total_timeout_minutes > 0:
+                        elapsed_minutes = (time.time() - start_time) / 60
+                        if elapsed_minutes >= total_timeout_minutes:
+                            timeout_exceeded = True
+                            self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).")
+                            break
+                
+                elapsed_time = time.time() - start_time
+                speed = (
+                    total_stats["total_size_mb"] / elapsed_time
+                    if elapsed_time > 0
+                    else 0
                 )
-                self.update_log(msg)
-                total_count = total_stats.get("total_copied_count", total_stats["files_copied"])
-                if all_copied_files:
-                    summary = f"\n=== Copied files ({total_count}) ===\n"
-                    for f in all_copied_files:
-                        summary += f"• {f}\n"
-                    if total_count > len(all_copied_files):
-                        summary += f"... and {total_count - len(all_copied_files)} more files (list truncated)\n"
-                    self.update_log(summary)
+                
+                # Классифицируем ошибки
+                error_types = self._classify_backup_errors(
+                    total_stats, timeout_exceeded, state.get("stop_flag", False)
+                )
+                
+                if state.get("stop_flag", False):
+                    self.update_log(f"[{profile_name}] Backup stopped.")
+                    # Восстанавливаем процессы и выходим
+                    self._restore_processes(profile_name, closed_processes, restore_after)
+                    self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
+                    return
+                
+                if error_types:
+                    # Были ошибки
+                    error_msg = ", ".join(error_types)
+                    error_logger.log_error(profile_name, error_types[0], error_msg, attempt, max_attempts)
+                    self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}")
+                    
+                    # Проверяем, нужно ли делать retry
+                    should_retry = retry_enabled and any(et in retry_on for et in error_types)
+                    
+                    if should_retry and attempt < max_attempts:
+                        self.update_log(f"[{profile_name}] Waiting {interval_seconds} seconds before retry...")
+                        # Ждём с проверкой stop_flag
+                        for _ in range(interval_seconds):
+                            if state.get("stop_flag", False):
+                                break
+                            time.sleep(1)
+                        continue
+                    else:
+                        # Все попытки исчерпаны или retry не нужен
+                        if attempt == max_attempts:
+                            self._execute_failure_actions(profile_name, on_total_failure)
                 else:
-                    self.update_log(f"\n=== [{profile_name}] Copied files: none (all files are up to date) ===\n")
+                    # Успех
+                    msg = (
+                        f"[{profile_name}] Total files copied: {total_stats['files_copied']}\n"
+                        f"Total files skipped: {total_stats['files_skipped']}\n"
+                        f"Total size copied: {total_stats['total_size_mb']:.2f} MB\n"
+                        f"Errors occurred: {total_stats['errors']}\n"
+                        f"Time elapsed: {elapsed_time:.2f} seconds\n"
+                        f"Average speed: {speed:.2f} MB/s"
+                    )
+                    self.update_log(msg)
+                    total_count = total_stats.get("total_copied_count", total_stats["files_copied"])
+                    if all_copied_files:
+                        summary = f"\n=== Copied files ({total_count}) ===\n"
+                        for f in all_copied_files:
+                            summary += f"• {f}\n"
+                        if total_count > len(all_copied_files):
+                            summary += f"... and {total_count - len(all_copied_files)} more files (list truncated)\n"
+                        self.update_log(summary)
+                    else:
+                        self.update_log(f"\n=== [{profile_name}] Copied files: none (all files are up to date) ===\n")
+                    
+                    # Успех — выходим из цикла
+                    break
+                    
+            except Exception as e:
+                error_msg = str(e)
+                error_type = "copy_errors"
+                error_logger.log_error(profile_name, error_type, error_msg, attempt, max_attempts)
+                self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}")
+                
+                should_retry = retry_enabled and error_type in retry_on
+                if should_retry and attempt < max_attempts:
+                    self.update_log(f"[{profile_name}] Waiting {interval_seconds} seconds before retry...")
+                    for _ in range(interval_seconds):
+                        if state.get("stop_flag", False):
+                            break
+                        time.sleep(1)
+                    continue
+        
+        # Восстанавливаем процессы после последней попытки
+        self._restore_processes(profile_name, closed_processes, restore_after)
+        self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
 
+    def _classify_backup_errors(self, total_stats, timeout_exceeded, stop_flag):
+        """Классифицирует ошибки бэкапа."""
+        error_types = []
+        if timeout_exceeded:
+            error_types.append("timeout_exceeded")
+        if total_stats.get("errors", 0) > 0:
+            error_types.append("copy_errors")
+        # Добавь сюда другие проверки при необходимости
+        return error_types
+
+    def _restore_processes(self, profile_name, closed_processes, restore_after):
+        """Восстанавливает закрытые процессы."""
+        if restore_after == "never":
+            return
+        
+        if not closed_processes:
+            return
+        
+        self.update_log(f"[{profile_name}] Restoring processes...")
+        from process_manager import start_process
+        for proc_name, exe_path in closed_processes.items():
+            if restore_after == "only_if_was_running" or restore_after == "always":
+                if start_process(exe_path):
+                    self.update_log(f"[{profile_name}] Restored: {proc_name}")
+                else:
+                    self.update_log(f"[{profile_name}] Failed to restore: {proc_name}")
+
+    def _execute_failure_actions(self, profile_name, actions):
+        """Выполняет действия при полном провале."""
+        if not actions:
+            return
+        
+        self.update_log(f"[{profile_name}] Executing failure actions...")
+        for action in actions:
+            action_type = action.get("action")
+            if action_type == "run_script":
+                script_path = action.get("script_path", "")
+                log_output = action.get("log_output", True)
+                if script_path:
+                    self._run_failure_script(profile_name, script_path, log_output)
+            elif action_type == "show_message":
+                message = action.get("message", "Backup failed")
+                # Подставляем переменные
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                message = message.replace("{profile_name}", profile_name)
+                message = message.replace("{timestamp}", timestamp)
+                self._show_failure_message(profile_name, message)
+
+    def _run_failure_script(self, profile_name, script_path, log_output):
+        """Запускает скрипт при сбое."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                [script_path],
+                capture_output=log_output,
+                text=True,
+                timeout=60
+            )
+            if log_output:
+                if result.stdout:
+                    self.update_log(f"[{profile_name}] Script output:\n{result.stdout}")
+                if result.stderr:
+                    self.update_log(f"[{profile_name}] Script errors:\n{result.stderr}")
         except Exception as e:
-            self.update_log(f"[{profile_name}] Error: {str(e)}")
-        finally:
-            self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
+            self.update_log(f"[{profile_name}] Failed to run script '{script_path}': {e}")
+
+    def _show_failure_message(self, profile_name, message):
+        """Показывает неблокирующее окно с сообщением."""
+        # Создаём или обновляем окно
+        if not hasattr(self, '_failure_message_windows'):
+            self._failure_message_windows = {}
+        
+        if profile_name in self._failure_message_windows:
+            # Окно уже открыто — обновляем содержимое
+            window = self._failure_message_windows[profile_name]
+            if window.winfo_exists():
+                window.text.delete(1.0, tk.END)
+                window.text.insert(tk.END, message)
+                return
+        
+        # Создаём новое окно
+        window = tk.Toplevel(self.root)
+        window.title(f"Backup Failed - {profile_name}")
+        window.geometry("500x300")
+        window.transient(self.root)
+        
+        text = scrolledtext.ScrolledText(window, wrap=tk.WORD, font=("Arial", 10))
+        text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text.insert(tk.END, message)
+        text.config(state=tk.DISABLED)
+        
+        window.text = text  # Сохраняем ссылку для обновления
+        self._failure_message_windows[profile_name] = window
+        
+        def on_close():
+            if profile_name in self._failure_message_windows:
+                del self._failure_message_windows[profile_name]
+            window.destroy()
+        
+        window.protocol("WM_DELETE_WINDOW", on_close)
 
     # =========================================================
     # ===================== AUTORUN ===========================
@@ -979,6 +1438,90 @@ class BackupApp:
                 )
             else:
                 w["weekly_hint_label"].config(text=err, fg="red")
+
+    def _update_profiles_toggle_text(self):
+        """Обновляет текст кнопки-переключателя блока профилей."""
+        if self.profiles_collapsed_var.get():
+            self.profiles_toggle_btn.config(text="▶ Profiles (click to expand)")
+        else:
+            self.profiles_toggle_btn.config(text="▼ Profiles (click to collapse)")
+
+    def toggle_profiles_visibility(self):
+        """Сворачивает/разворачивает блок профилей (тулбар + notebook)."""
+        collapsed = self.profiles_collapsed_var.get()
+        if collapsed:
+            # Разворачиваем — вставляем перед global_frame
+            self.profiles_toolbar.pack(fill=tk.X, pady=(0, 5), before=self.global_frame)
+            self.notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 10), before=self.global_frame)
+            self.profiles_collapsed_var.set(False)
+        else:
+            # Сворачиваем
+            self.profiles_toolbar.pack_forget()
+            self.notebook.pack_forget()
+            self.profiles_collapsed_var.set(True)
+        self._update_profiles_toggle_text()
+        self.settings["global"]["profiles_collapsed"] = self.profiles_collapsed_var.get()
+        self.save_config()
+
+    def _update_error_indicator(self):
+        """Обновляет состояние индикатора ошибок."""
+        last_pos = self.settings["global"].get("errors_last_read_pos", 0)
+        new_errors, new_pos = error_logger.get_new_errors(last_pos)
+        
+        if new_errors:
+            count = len(new_errors)
+            self.error_indicator.config(text=f"⚠ [{count} error{'s' if count != 1 else ''}]")
+        else:
+            self.error_indicator.config(text="")
+        
+        # Запускаем периодическую проверку через 5 секунд
+        self.root.after(5000, self._update_error_indicator)
+
+    def _open_error_summary(self):
+        """Открывает окно с последними ошибками."""
+        # Если окно уже открыто — просто показываем его
+        if hasattr(self, '_error_summary_window') and self._error_summary_window.winfo_exists():
+            self._error_summary_window.lift()
+            self._error_summary_window.focus_force()
+            return
+        
+        # Создаём новое окно
+        window = tk.Toplevel(self.root)
+        window.title("Error Summary")
+        window.geometry("700x500")
+        window.transient(self.root)
+        
+        # Текст с ошибками
+        text = scrolledtext.ScrolledText(window, wrap=tk.WORD, font=("Consolas", 9))
+        text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        errors = error_logger.get_last_n_errors(50)
+        if errors:
+            for err in errors:
+                text.insert(tk.END, err + "\n")
+        else:
+            text.insert(tk.END, "No errors recorded.")
+        
+        text.config(state=tk.DISABLED)
+        
+        # Кнопка "Open full log"
+        btn_frame = ttk.Frame(window)
+        btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        def open_full_log():
+            import subprocess
+            log_path = error_logger.errors_log_file
+            if os.path.exists(log_path):
+                subprocess.Popen(["notepad.exe", log_path])
+        
+        ttk.Button(btn_frame, text="Open full log", command=open_full_log).pack(side=tk.RIGHT)
+        
+        self._error_summary_window = window
+        
+        # Сбрасываем индикатор и обновляем позицию прочтения
+        self.error_indicator.config(text="")
+        self.settings["global"]["errors_last_read_pos"] = error_logger.get_file_size()
+        self.save_config()
 
     def _register_schedule(self, profile_name, profile):
         sched = profile.get("backup_schedule", "None")
@@ -1122,6 +1665,33 @@ class BackupApp:
                     "weekly_days": ["Monday"],
                     "weekly_time": "23:00",
                 }
+            
+            # --- Миграция новых полей для всех профилей ---
+            for pname, pdata in self.settings["profiles"].items():
+                if "process_control" not in pdata:
+                    pdata["process_control"] = {
+                        "enabled": False,
+                        "close_before": [],
+                        "close_mode": "graceful_then_force",
+                        "graceful_timeout_sec": 10,
+                        "on_close_failure": "abort",
+                        "restore_after": "only_if_was_running"
+                    }
+                if "retry" not in pdata:
+                    pdata["retry"] = {
+                        "enabled": False,
+                        "max_attempts": 3,
+                        "interval_seconds": 300,
+                        "retry_on": ["disk_unavailable", "process_close_failed", "copy_errors"],
+                        "on_total_failure": []
+                    }
+                if "total_timeout_minutes" not in pdata:
+                    pdata["total_timeout_minutes"] = 0
+            
+            if "errors_last_read_pos" not in self.settings["global"]:
+                self.settings["global"]["errors_last_read_pos"] = 0
+            if "profiles_collapsed" not in self.settings["global"]:
+                self.settings["global"]["profiles_collapsed"] = False
 
     # =========================================================
     # ==================== TRAY ICON ==========================
