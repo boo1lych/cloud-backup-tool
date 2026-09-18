@@ -219,8 +219,6 @@ class BackupApp:
                    command=self.start_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(gbtn_frame, text="■ Stop All",
                    command=self.stop_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(gbtn_frame, text="✕ Exit",
-                   command=self.exit_app, width=15).pack(side=tk.LEFT)
 
         self.error_indicator = tk.Label(gbtn_frame, text="", fg="red", font=("Arial", 10, "bold"), cursor="hand2")
         self.error_indicator.pack(side=tk.RIGHT, padx=(20, 0))
