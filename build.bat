@@ -103,7 +103,7 @@ goto :pause_exit
 )
 echo   ℹ️  venv314 не найден, используем системный python
 )
-!PYTHON! -c "import schedule, pystray, PIL, sv_ttk, PyInstaller" >nul 2>nul
+!PYTHON! -c "import schedule, pystray, PIL, sv_ttk, PyInstaller, psutil" >nul 2>nul
 if !ERRORLEVEL! neq 0 (
 echo %YELLOW%⚠️  Некоторые зависимости не установлены. Устанавливаю...%RESET%
 !PYTHON! -m pip install -r requirements.txt
@@ -131,7 +131,7 @@ echo.
 
 :: Замер времени
 set START_TIME=%TIME%
-python -m PyInstaller "%SPEC_FILE%"
+!PYTHON! -m PyInstaller "%SPEC_FILE%"
 
 :: === КРИТИЧНО: сохраняем код выхода СРАЗУ ===
 set "PYI_EXIT_CODE=%ERRORLEVEL%"
