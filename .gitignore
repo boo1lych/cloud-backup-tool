@@ -40,6 +40,7 @@ dump_*.csv
 build/
 dist/
 Releases/
+MD/
 scripts/
 logs/
 *.exe
