@@ -79,7 +79,6 @@ from PIL import Image
 class BackupApp:
     def __init__(self, root):
         self.root = root
-        sv_ttk.set_theme("light")
         self.root.title("Cloud Backup Tool")
         self.root.geometry("1500x850")
         self.root.minsize(900, 650)
@@ -104,6 +103,7 @@ class BackupApp:
                 "start_minimized": False,
                 "log_to_file": True,
                 "active_profile": "Default",
+                "theme": "light",
             },
             "profiles": {
                 "Default": {
@@ -124,6 +124,7 @@ class BackupApp:
         # Состояние каждого профиля
         self.profile_state = {}
         self.load_config()
+        self._apply_theme(self.settings["global"].get("theme", "light"))
 
         for pname in self.settings["profiles"]:
             self.profile_state[pname] = {"running": False, "thread": None, "stop_flag": False}
@@ -182,14 +183,19 @@ class BackupApp:
 
         prefs_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Preferences", menu=prefs_menu)
-        
         self.prefs_autorun_var = tk.BooleanVar(value=self.check_autorun())
         self.prefs_start_min_var = tk.BooleanVar(value=self.settings["global"].get("start_minimized", False))
         self.prefs_log_file_var = tk.BooleanVar(value=self.settings["global"].get("log_to_file", True))
-        
+        self.prefs_theme_var = tk.StringVar(value=self.settings["global"].get("theme", "light"))
         prefs_menu.add_checkbutton(label="Run at Windows startup", variable=self.prefs_autorun_var, command=self._toggle_autorun_from_menu)
         prefs_menu.add_checkbutton(label="Start minimized", variable=self.prefs_start_min_var, command=self._toggle_start_minimized_from_menu)
         prefs_menu.add_checkbutton(label="Save log to file", variable=self.prefs_log_file_var, command=self._toggle_log_to_file_from_menu)
+        prefs_menu.add_separator()
+        theme_menu = tk.Menu(prefs_menu, tearoff=0)
+        theme_menu.add_radiobutton(label="Light", variable=self.prefs_theme_var, value="light", command=self._apply_theme_from_menu)
+        theme_menu.add_radiobutton(label="Dark", variable=self.prefs_theme_var, value="dark", command=self._apply_theme_from_menu)
+        prefs_menu.add_cascade(label="Theme", menu=theme_menu)        
+        
 
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -954,39 +960,42 @@ class BackupApp:
     def open_preferences(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Preferences")
-        dialog.geometry("350x180")
+        dialog.geometry("350x240")
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
-
         frame = ttk.Frame(dialog, padding=20)
         frame.pack(fill=tk.BOTH, expand=True)
-
         autorun_var = tk.BooleanVar(value=self.check_autorun())
         start_min_var = tk.BooleanVar(value=self.settings["global"].get("start_minimized", False))
         log_file_var = tk.BooleanVar(value=self.settings["global"].get("log_to_file", True))
-
+        theme_var = tk.StringVar(value=self.settings["global"].get("theme", "light"))
         ttk.Checkbutton(frame, text="Run at Windows startup", variable=autorun_var).pack(anchor=tk.W, pady=5)
         ttk.Checkbutton(frame, text="Start minimized", variable=start_min_var).pack(anchor=tk.W, pady=5)
         ttk.Checkbutton(frame, text="Save log to file", variable=log_file_var).pack(anchor=tk.W, pady=5)
-
+        theme_frame = ttk.Frame(frame)
+        theme_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(theme_frame, text="Theme:").pack(side=tk.LEFT, padx=(0, 10))
+        theme_combo = ttk.Combobox(theme_frame, textvariable=theme_var,
+                                values=["light", "dark"], state="readonly", width=10)
+        theme_combo.pack(side=tk.LEFT)
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=(20, 0))
-
         def on_ok():
             # Autorun
             if autorun_var.get() != self.check_autorun():
                 self.set_autorun(autorun_var.get())
-
             # Start minimized
             self.settings["global"]["start_minimized"] = start_min_var.get()
-
             # Log to file
             self.settings["global"]["log_to_file"] = log_file_var.get()
-
+            # Theme
+            new_theme = theme_var.get()
+            self.settings["global"]["theme"] = new_theme
+            self._apply_theme(new_theme)
+            self.prefs_theme_var.set(new_theme)
             self.save_config()
             dialog.destroy()
-
         ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT, padx=(0, 5))
 
@@ -1003,6 +1012,20 @@ class BackupApp:
     def _toggle_log_to_file_from_menu(self):
         self.settings["global"]["log_to_file"] = self.prefs_log_file_var.get()
         self.save_config()
+
+    def _apply_theme_from_menu(self):
+        theme = self.prefs_theme_var.get()
+        self.settings["global"]["theme"] = theme
+        self._apply_theme(theme)
+        self.save_config()
+
+    def _apply_theme(self, theme):
+        if theme not in ("light", "dark"):
+            theme = "light"
+        try:
+            sv_ttk.set_theme(theme)
+        except Exception as e:
+            print(f"Failed to apply theme '{theme}': {e}")
 
     # =========================================================
     # ================= PROFILE STATUS / STATE ================
@@ -1577,9 +1600,10 @@ class BackupApp:
             self.settings = {
                 "global": {
                     "autorun": False,
-                    "start_minimized": data.get("start_minimized", False),
-                    "log_to_file": data.get("log_to_file", True),
+                    "start_minimized": False,
+                    "log_to_file": True,
                     "active_profile": "Default",
+                    "theme": "light",
                 },
                 "profiles": {"Default": legacy_profile},
             }
@@ -1592,6 +1616,8 @@ class BackupApp:
 
         if "global" in data:
             self.settings["global"].update(data["global"])
+        if "theme" not in self.settings["global"]:
+            self.settings["global"]["theme"] = "light"
         if "profiles" in data:
             self.settings["profiles"] = data["profiles"]
             for pname, pdata in self.settings["profiles"].items():
