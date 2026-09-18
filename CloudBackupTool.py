@@ -43,11 +43,12 @@ def log_exit_or_crash(reason, exc_info=None):
     """Логирует причины завершения работы или краха приложения."""
     msg = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [CRITICAL] {reason}"
     if exc_info:
-        msg += "\n" + "".join(traceback.format_exception(*exc_info))
-        msg += "\n" + "-" * 50 + "\n"
+        msg += "\n" + "\n".join(traceback.format_exception(*exc_info))
+    msg += "\n" + "-" * 50 + "\n"
     try:
         with open(CRASH_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(msg)
+            f.flush()
     except Exception:
         pass
 
