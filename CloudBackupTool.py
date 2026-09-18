@@ -407,44 +407,42 @@ class BackupApp:
         # --- Process Control ---
         pc_frame = ttk.LabelFrame(advanced_tab, text="Process Control", padding=10)
         pc_frame.pack(fill=tk.X, pady=(0, 10))
-        
         pc = profile_data.get("process_control", {})
+        
         widgets["pc_enabled_var"] = tk.BooleanVar(value=pc.get("enabled", False))
         ttk.Checkbutton(pc_frame, text="Enable process control", variable=widgets["pc_enabled_var"],
-                        command=lambda pn=profile_name: self.save_profile_settings(pn)).pack(anchor=tk.W, pady=(0, 10))
-
-        ttk.Label(pc_frame, text="Processes to close before backup:").pack(anchor=tk.W)
-        widgets["pc_close_listbox"] = tk.Listbox(pc_frame, height=4, width=40)
-        widgets["pc_close_listbox"].pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+                        command=lambda pn=profile_name: self.save_profile_settings(pn)).grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 10))
+        
+        ttk.Label(pc_frame, text="Processes to close before backup:").grid(row=1, column=0, sticky=tk.NW, pady=(0, 5))
+        
+        widgets["pc_close_listbox"] = tk.Listbox(pc_frame, height=5, width=28)
+        widgets["pc_close_listbox"].grid(row=2, column=0, rowspan=2, sticky=tk.NW, padx=(0, 10))
         for proc in pc.get("close_before", []):
             widgets["pc_close_listbox"].insert(tk.END, proc)
-        
+            
         pc_btns = ttk.Frame(pc_frame)
-        pc_btns.pack(side=tk.LEFT, fill=tk.Y)
-        ttk.Button(pc_btns, text="Add...", command=lambda pn=profile_name: self.add_process_to_close(pn), width=10).pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(pc_btns, text="Remove", command=lambda pn=profile_name: self.remove_process_to_close(pn), width=10).pack(fill=tk.X)
-
-        pc_opts = ttk.Frame(pc_frame)
-        pc_opts.pack(fill=tk.X, pady=(10, 0))
+        pc_btns.grid(row=2, column=1, rowspan=2, sticky=tk.NW)
+        ttk.Button(pc_btns, text="Add...", command=lambda pn=profile_name: self.add_process_to_close(pn), width=12).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(pc_btns, text="Remove", command=lambda pn=profile_name: self.remove_process_to_close(pn), width=12).pack(fill=tk.X)
         
-        ttk.Label(pc_opts, text="Close mode:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Label(pc_frame, text="Close mode:").grid(row=2, column=2, sticky=tk.W, padx=(20, 10), pady=2)
         widgets["pc_close_mode_var"] = tk.StringVar(value=pc.get("close_mode", "graceful_then_force"))
-        ttk.Combobox(pc_opts, textvariable=widgets["pc_close_mode_var"], values=["graceful", "force", "graceful_then_force"],
-                     state="readonly", width=20).grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-
-        ttk.Label(pc_opts, text="Graceful timeout (sec):").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Combobox(pc_frame, textvariable=widgets["pc_close_mode_var"], values=["graceful", "force", "graceful_then_force"],
+                    state="readonly", width=22).grid(row=2, column=3, sticky=tk.W, pady=2)
+                    
+        ttk.Label(pc_frame, text="Graceful timeout (sec):").grid(row=3, column=2, sticky=tk.W, padx=(20, 10), pady=2)
         widgets["pc_graceful_timeout_var"] = tk.StringVar(value=str(pc.get("graceful_timeout_sec", 10)))
-        ttk.Entry(pc_opts, textvariable=widgets["pc_graceful_timeout_var"], width=10).grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-
-        ttk.Label(pc_opts, text="On close failure:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Entry(pc_frame, textvariable=widgets["pc_graceful_timeout_var"], width=10).grid(row=3, column=3, sticky=tk.W, pady=2)
+        
+        ttk.Label(pc_frame, text="On close failure:").grid(row=4, column=2, sticky=tk.W, padx=(20, 10), pady=2)
         widgets["pc_on_close_failure_var"] = tk.StringVar(value=pc.get("on_close_failure", "abort"))
-        ttk.Combobox(pc_opts, textvariable=widgets["pc_on_close_failure_var"], values=["abort", "continue"],
-                     state="readonly", width=20).grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-
-        ttk.Label(pc_opts, text="Restore after:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Combobox(pc_frame, textvariable=widgets["pc_on_close_failure_var"], values=["abort", "continue"],
+                    state="readonly", width=22).grid(row=4, column=3, sticky=tk.W, pady=2)
+                    
+        ttk.Label(pc_frame, text="Restore after:").grid(row=5, column=2, sticky=tk.W, padx=(20, 10), pady=2)
         widgets["pc_restore_after_var"] = tk.StringVar(value=pc.get("restore_after", "only_if_was_running"))
-        ttk.Combobox(pc_opts, textvariable=widgets["pc_restore_after_var"], values=["always", "only_if_was_running", "never"],
-                     state="readonly", width=20).grid(row=3, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+        ttk.Combobox(pc_frame, textvariable=widgets["pc_restore_after_var"], values=["always", "only_if_was_running", "never"],
+                    state="readonly", width=22).grid(row=5, column=3, sticky=tk.W, pady=2)
 
         # --- Retry Settings ---
         retry_frame = ttk.LabelFrame(advanced_tab, text="Retry Settings", padding=10)
