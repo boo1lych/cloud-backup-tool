@@ -1214,8 +1214,14 @@ class BackupApp:
                     from process_manager import close_process
                     success, exe_path = close_process(proc_name, mode=close_mode, timeout=graceful_timeout)
                     if success:
-                        closed_processes[proc_name] = exe_path
-                        self.update_log(f"[{profile_name}] Closed: {proc_name}")
+                        if exe_path:
+                            # Процесс был запущен и мы его закрыли — запомним для восстановления после бэкапа
+                            closed_processes[proc_name] = exe_path
+                            self.update_log(f"[{profile_name}] Closed: {proc_name}")
+                        else:
+                            # Процесс уже был закрыт (например, после предыдущей попытки) — это успех,
+                            # но восстанавливать его не нужно, т.к. мы его не закрывали
+                            self.update_log(f"[{profile_name}] Already closed: {proc_name}")
                     else:
                         self.update_log(f"[{profile_name}] Failed to close: {proc_name}")
                         if on_close_failure == "abort":

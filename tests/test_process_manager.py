@@ -131,13 +131,14 @@ class TestCloseProcess:
             mock_proc.kill.assert_called_once()
 
     def test_process_not_found(self):
-        """Процесс не найден."""
+        """Процесс не найден — считаем успехом (уже закрыт)."""
         with patch('process_manager.find_process_by_name') as mock_find:
             mock_find.return_value = None
             
             success, exe_path = close_process('nonexistent.exe', mode='graceful', timeout=5)
             
-            assert success is False
+            # Процесс уже не запущен — для цели "закрыть перед бэкапом" это успех
+            assert success is True
             assert exe_path is None
 
     def test_process_already_terminated(self):
