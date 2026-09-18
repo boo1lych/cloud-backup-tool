@@ -37,10 +37,9 @@ def find_process_by_name(process_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def close_process(process_name: str, mode: str = 'graceful_then_force', 
-                  timeout: int = 10) -> Tuple[bool, Optional[str]]:
+def close_process(process_name: str, mode: str = 'graceful_then_force',
+timeout: int = 10) -> Tuple[bool, Optional[str]]:
     """Закрывает процесс по имени.
-    
     Args:
         process_name: имя процесса (например, "OUTLOOK.EXE")
         mode: режим закрытия:
@@ -48,14 +47,14 @@ def close_process(process_name: str, mode: str = 'graceful_then_force',
             - 'force': жёсткое завершение (kill)
             - 'graceful_then_force': сначала graceful, потом force
         timeout: таймаут ожидания после graceful (в секундах)
-        
     Returns:
         Tuple[bool, Optional[str]]: (успех, путь к exe или None)
     """
     proc_info = find_process_by_name(process_name)
     if not proc_info:
-        return False, None
-    
+        # Процесс уже не запущен — для нашей цели (закрыть перед бэкапом) это успех.
+        # Возвращаем None как exe_path, чтобы не пытаться восстанавливать его позже.
+        return True, None
     exe_path = proc_info['exe']
     pid = proc_info.get('pid')
     
