@@ -165,3 +165,65 @@ class TestGetLastNErrors:
         assert len(errors) == 50
         assert "P99" in errors[-1]
         assert "P50" in errors[0]
+
+# =========================================================
+# =========== TESTS FOR log_error WITH DETAILS =============
+# =========================================================
+
+class TestLogErrorWithDetails:
+    """Тесты для log_error с параметром details."""
+
+    def test_log_error_with_details(self, tmp_path):
+        """Проверяет форматирование ошибок с деталями."""
+        from error_log import ErrorLogger
+        
+        logger = ErrorLogger(log_dir=str(tmp_path))
+        details = [
+            'file1.txt: Permission denied',
+            'file2.txt: Access is denied',
+        ]
+        
+        logger.log_error('TestProfile', 'copy_errors', '3 files failed',
+                        attempt=1, max_attempts=3, details=details)
+        
+        # Читаем файл и проверяем формат
+        with open(logger.errors_log_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        assert 'TestProfile' in content
+        assert 'copy_errors' in content
+        assert 'file1.txt: Permission denied' in content
+        assert 'file2.txt: Access is denied' in content
+        assert '•' in content  # Проверяем маркер списка
+
+    def test_log_error_with_many_details_truncated(self, tmp_path):
+        """Проверяет обрезку деталей при большом количестве."""
+        from error_log import ErrorLogger
+        
+        logger = ErrorLogger(log_dir=str(tmp_path))
+        details = [f'file{i}.txt: Error {i}' for i in range(100)]
+        
+        logger.log_error('TestProfile', 'copy_errors', '100 files failed',
+                        attempt=1, max_attempts=3, details=details)
+        
+        with open(logger.errors_log_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Должно быть максимум 50 деталей + сообщение о truncation
+        assert '... and 50 more' in content
+
+    def test_log_error_without_details(self, tmp_path):
+        """Проверяет, что логирование без details работает как раньше."""
+        from error_log import ErrorLogger
+        
+        logger = ErrorLogger(log_dir=str(tmp_path))
+        logger.log_error('TestProfile', 'disk_unavailable', 'Disk not found',
+                        attempt=1, max_attempts=3)
+        
+        with open(logger.errors_log_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        assert 'TestProfile' in content
+        assert 'disk_unavailable' in content
+        assert 'Disk not found' in content
+        assert '•' not in content  # Не должно быть маркеров списка
