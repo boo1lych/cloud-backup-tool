@@ -998,7 +998,7 @@ class BackupApp:
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT, padx=(0, 5))
 
     def open_about(self):
-        messagebox.showinfo("About", "Cloud Backup Tool\nVersion 1.0\n\nBackup utility for cloud storage")
+        messagebox.showinfo("About", "Cloud Backup Tool\nVersion 3.0.0\n\nBackup utility for cloud storage")
 
     def _toggle_autorun_from_menu(self):
         self.set_autorun(self.prefs_autorun_var.get())
