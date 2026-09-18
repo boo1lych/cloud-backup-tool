@@ -10,6 +10,31 @@ import shutil
 import fnmatch
 import ctypes
 
+FORBIDDEN_PROFILE_CHARS = '<>:"/\\|?*'
+RESERVED_PROFILE_NAMES = (
+    {'CON', 'PRN', 'AUX', 'NUL'}
+    | {f'COM{i}' for i in range(1, 10)}
+    | {f'LPT{i}' for i in range(1, 10)}
+)
+
+
+def validate_profile_name(name):
+    """Проверяет, можно ли использовать name как имя профиля (и имя файла лога).
+    Возвращает (ok: bool, error_message: str).
+    """
+    if not name or not name.strip():
+        return False, "Name cannot be empty"
+    stripped = name.strip()
+    for ch in FORBIDDEN_PROFILE_CHARS:
+        if ch in stripped:
+            return False, f"Character '{ch}' is not allowed in profile name"
+    if all(c in '. ' for c in stripped):
+        return False, "Name cannot consist only of dots and spaces"
+    base = stripped.rstrip('. ')
+    if base.upper() in RESERVED_PROFILE_NAMES:
+        return False, f"Name '{base}' is reserved by Windows"
+    return True, ""
+
 
 def is_reparse_point(path):
     """Проверяет, является ли путь точкой повторной обработки (симлинк, джанкшн)."""
@@ -87,12 +112,14 @@ all_sources_in_profile, state, log=None):
             "total_size_mb": 0,
             "errors": 0,
             "copied_files": [],
+            "error_details": [],
         }
     files_copied = 0
     files_skipped = 0
     total_size = 0
     errors = 0
     copied_files = []
+    error_details = []
     exclude_patterns = [p.strip() for p in exclude_patterns_str.split(",") if p.strip()]
     normalized_patterns = []
     for p in exclude_patterns:
@@ -141,6 +168,7 @@ all_sources_in_profile, state, log=None):
                     "total_size_mb": total_size / 1024 / 1024,
                     "errors": errors,
                     "copied_files": copied_files,
+                    "error_details": error_details,
                 }
             src_file = os.path.join(root, file)
             dst_file = os.path.join(dest_path, file)
@@ -170,6 +198,7 @@ all_sources_in_profile, state, log=None):
                         log(f"Copied: {src_file}")
                 except Exception as e:
                     errors += 1
+                    error_details.append(f"{src_file}: {e}")
                     if log:
                         log(f"Error copying {src_file}: {str(e)}")
             else:
@@ -182,4 +211,5 @@ all_sources_in_profile, state, log=None):
         "total_size_mb": total_size / 1024 / 1024,
         "errors": errors,
         "copied_files": copied_files,
+        "error_details": error_details,
     }

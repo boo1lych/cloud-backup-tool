@@ -9,17 +9,18 @@ import ctypes
 import winreg as reg
 import time
 import schedule
-import logging
-from logging.handlers import RotatingFileHandler
 import sys
 import sv_ttk
 import traceback
 import atexit
 import queue
 import copy
-
-from backup_logic import validate_custom_time, validate_hhmm, backup_saves, is_reparse_point
+from backup_logic import (
+    validate_custom_time, validate_hhmm, backup_saves, is_reparse_point,
+    validate_profile_name,
+)
 from error_log import error_logger
+from profile_logger import ProfileLogger
 
 MAX_COPIED_LIST = 10000
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -33,7 +34,6 @@ else:
 
 CONFIG_FILE = os.path.join(BASE_DIR, "bt2_config.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
-LOG_FILE = os.path.join(LOG_DIR, "backup.log")
 CRASH_LOG_FILE = os.path.join(LOG_DIR, "crash_exit.log")
 
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -55,7 +55,7 @@ def log_exit_or_crash(reason, exc_info=None):
 
 def _global_exception_handler(exc_type, exc_value, exc_traceback):
     log_exit_or_crash("Unhandled exception in main thread", (exc_type, exc_value, exc_traceback))
-    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+    sys.excepthook(exc_type, exc_value, exc_traceback)
 
 
 def _thread_exception_handler(args):
@@ -126,37 +126,24 @@ class BackupApp:
         self.profile_state = {}
         self.load_config()
         self._apply_theme(self.settings["global"].get("theme", "light"))
-
         for pname in self.settings["profiles"]:
             self.profile_state[pname] = {"running": False, "thread": None, "stop_flag": False}
 
-        # --- Ротируемый логгер ---
-        self.logger = logging.getLogger("CloudBackupTool")
-        self.logger.setLevel(logging.INFO)
-        if not self.logger.handlers:
-            rotating_handler = RotatingFileHandler(
-                LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
-            )
-            formatter = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-            rotating_handler.setFormatter(formatter)
-            self.logger.addHandler(rotating_handler)
+        # --- Логгеры по профилям ---
+        self.profile_logger = ProfileLogger()
 
         self.sched_stop = threading.Event()
         self.sched_thread = None
         self.schedule_lock = threading.Lock()
-
         self.profile_widgets = {}
         self.current_profile_name = None
         self.log_queue = queue.Queue()
 
         self.create_widgets()
-
         self.root.after(1000, self._flush_log_ui)
         self.root.after(2000, self._update_error_indicator)
-
         self.create_tray_icon()
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
-
         self.setup_schedule()
 
         if self.settings["global"].get("start_minimized", False):
@@ -177,7 +164,6 @@ class BackupApp:
     def create_widgets(self):
         # === Menu Bar ===
         menubar = tk.Menu(self.root)
-
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Exit", command=self.exit_app)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -195,9 +181,7 @@ class BackupApp:
         theme_menu = tk.Menu(prefs_menu, tearoff=0)
         theme_menu.add_radiobutton(label="Light", variable=self.prefs_theme_var, value="light", command=self._apply_theme_from_menu)
         theme_menu.add_radiobutton(label="Dark", variable=self.prefs_theme_var, value="dark", command=self._apply_theme_from_menu)
-        prefs_menu.add_cascade(label="Theme", menu=theme_menu)        
-        
-
+        prefs_menu.add_cascade(label="Theme", menu=theme_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="About", command=self.open_about)
@@ -212,15 +196,12 @@ class BackupApp:
         # === Глобальная панель управления (без изменений) ===
         global_control = ttk.LabelFrame(main_frame, text="Global Control", padding=10)
         global_control.pack(fill=tk.X, pady=(0, 10))
-
         gbtn_frame = ttk.Frame(global_control)
         gbtn_frame.pack(fill=tk.X)
-
         ttk.Button(gbtn_frame, text="► Start All",
                    command=self.start_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(gbtn_frame, text="■ Stop All",
                    command=self.stop_all_backups, width=15).pack(side=tk.LEFT, padx=(0, 10))
-
         self.error_indicator = tk.Label(gbtn_frame, text="", fg="red", font=("Arial", 10, "bold"), cursor="hand2")
         self.error_indicator.pack(side=tk.RIGHT, padx=(20, 0))
         self.error_indicator.bind("<Button-1>", lambda e: self._open_error_summary())
@@ -258,7 +239,6 @@ class BackupApp:
         self.main_tab = ttk.Frame(self.profile_notebook, padding=10)
         self.process_control_tab = ttk.Frame(self.profile_notebook, padding=10)
         self.retry_settings_tab = ttk.Frame(self.profile_notebook, padding=10)
-
         self.profile_notebook.add(self.main_tab, text="Main")
         self.profile_notebook.add(self.process_control_tab, text="Process Control")
         self.profile_notebook.add(self.retry_settings_tab, text="Retry Settings")
@@ -286,7 +266,6 @@ class BackupApp:
         # === Log ===
         log_frame = ttk.LabelFrame(main_frame, text="Backup Log", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True)
-
         self.log_display = scrolledtext.ScrolledText(log_frame, height=8, width=90, font=("Consolas", 9))
         self.log_display.pack(fill=tk.BOTH, expand=True)
 
@@ -302,25 +281,20 @@ class BackupApp:
         widgets["enabled_var"] = tk.BooleanVar(value=False)
         ttk.Checkbutton(ctrl_inner, text="Enabled", variable=widgets["enabled_var"],
                         command=self.on_profile_enabled_changed).pack(side=tk.LEFT, padx=(0, 20))
-
         widgets["start_btn"] = ttk.Button(ctrl_inner, text="► Start",
                                           command=self.start_current_profile_backup, width=12)
         widgets["start_btn"].pack(side=tk.LEFT, padx=(0, 5))
-
         widgets["stop_btn"] = ttk.Button(ctrl_inner, text="■ Stop",
                                          command=self.stop_current_profile_backup, width=12, state=tk.DISABLED)
         widgets["stop_btn"].pack(side=tk.LEFT, padx=(0, 20))
-
         widgets["status_label"] = ttk.Label(ctrl_inner, text="Idle", foreground="gray")
         widgets["status_label"].pack(side=tk.LEFT)
 
         # Source Directories
         source_frame = ttk.LabelFrame(self.main_tab, text="Source Directories", padding=10)
         source_frame.pack(fill=tk.X, pady=(0, 10))
-
         widgets["source_listbox"] = tk.Listbox(source_frame, selectmode=tk.EXTENDED, height=4, width=80)
         widgets["source_listbox"].pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
-
         source_btns = ttk.Frame(source_frame)
         source_btns.pack(side=tk.RIGHT, fill=tk.Y)
         ttk.Button(source_btns, text="Add...", command=self.add_source, width=12).pack(fill=tk.X, pady=(0, 5))
@@ -329,7 +303,6 @@ class BackupApp:
         # Backup Destination
         dest_frame = ttk.LabelFrame(self.main_tab, text="Backup Destination", padding=10)
         dest_frame.pack(fill=tk.X, pady=(0, 10))
-
         ttk.Label(dest_frame, text="Directory:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
         widgets["backup_entry"] = ttk.Entry(dest_frame, width=60)
         widgets["backup_entry"].grid(row=0, column=1, padx=(0, 10), sticky=tk.EW)
@@ -342,12 +315,10 @@ class BackupApp:
 
         left_col = ttk.Frame(settings_frame)
         left_col.grid(row=0, column=0, sticky=tk.NW, padx=(0, 20))
-
         widgets["skip_links_var"] = tk.BooleanVar(value=True)
         ttk.Checkbutton(left_col, text="Skip symbolic links/junctions",
                         variable=widgets["skip_links_var"],
                         command=self.save_current_profile_settings).pack(anchor=tk.W, pady=2)
-
         widgets["auto_start_backup_var"] = tk.BooleanVar(value=False)
         ttk.Checkbutton(left_col, text="Run backup immediately on app start",
                         variable=widgets["auto_start_backup_var"],
@@ -357,7 +328,6 @@ class BackupApp:
         right_col.grid(row=0, column=1, sticky=tk.NW)
 
         ttk.Label(right_col, text="Backup Schedule:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-
         widgets["schedule_var"] = tk.StringVar(value="None")
         widgets["schedule_menu"] = ttk.Combobox(right_col, textvariable=widgets["schedule_var"],
                                                 values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly"],
@@ -377,13 +347,11 @@ class BackupApp:
 
         widgets["custom_hint_label"] = tk.Label(right_col, text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)", fg="gray")
         widgets["custom_hint_label"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
-
         widgets["weekly_hint_label"] = tk.Label(right_col, text="Time format: HH:MM (e.g., 23:00)", fg="gray")
         widgets["weekly_hint_label"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
 
         widgets["weekly_days_frame"] = ttk.Frame(right_col)
         widgets["weekly_days_frame"].grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(0, 5))
-
         widgets["weekly_day_vars"] = {}
         for day in WEEK_DAYS:
             var = tk.BooleanVar(value=False)
@@ -394,7 +362,6 @@ class BackupApp:
         ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=3, column=0, sticky=tk.W, pady=(10, 0))
         widgets["exclude_entry"] = ttk.Entry(right_col, width=40)
         widgets["exclude_entry"].grid(row=3, column=1, columnspan=2, sticky=tk.EW, pady=(10, 0))
-
         widgets["exclude_hint_label"] = tk.Label(right_col, text="Masks: *$*.txt, ~$, *.tmp, logs/*", fg="gray")
         widgets["exclude_hint_label"].grid(row=4, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
 
@@ -408,7 +375,6 @@ class BackupApp:
 
     def _create_process_control_tab_widgets(self):
         widgets = self.profile_widgets
-
         pc_frame = ttk.LabelFrame(self.process_control_tab, text="Process Control", padding=10)
         pc_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -417,7 +383,6 @@ class BackupApp:
                         command=self.save_current_profile_settings).grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 10))
 
         ttk.Label(pc_frame, text="Processes to close before backup:").grid(row=1, column=0, sticky=tk.NW, pady=(0, 5))
-
         widgets["pc_close_listbox"] = tk.Listbox(pc_frame, height=5, width=28)
         widgets["pc_close_listbox"].grid(row=2, column=0, rowspan=2, sticky=tk.NW, padx=(0, 10))
 
@@ -449,7 +414,6 @@ class BackupApp:
 
     def _create_retry_settings_tab_widgets(self):
         widgets = self.profile_widgets
-
         retry_frame = ttk.LabelFrame(self.retry_settings_tab, text="Retry Settings", padding=10)
         retry_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -469,11 +433,9 @@ class BackupApp:
         ttk.Entry(retry_opts, textvariable=widgets["retry_interval_seconds_var"], width=10).grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
 
         ttk.Label(retry_opts, text="Retry on:").grid(row=0, column=2, sticky=tk.W, padx=(20, 0), pady=2)
-
         widgets["retry_on_vars"] = {}
         retry_on_options = ["disk_unavailable", "process_close_failed", "copy_errors", "low_disk_space", "source_missing", "timeout_exceeded"]
         retry_on_labels = ["Disk unavailable", "Process close failed", "Copy errors", "Low disk space", "Source missing", "Timeout exceeded"]
-
         for i, (opt, label) in enumerate(zip(retry_on_options, retry_on_labels)):
             var = tk.BooleanVar(value=False)
             widgets["retry_on_vars"][opt] = var
@@ -483,11 +445,9 @@ class BackupApp:
                             command=self.save_current_profile_settings).grid(row=row, column=col, sticky=tk.W, padx=(20, 0), pady=2)
 
         ttk.Label(retry_frame, text="On total failure:").pack(anchor=tk.W, pady=(10, 5))
-
         widgets["retry_failure_listbox"] = tk.Listbox(retry_frame, height=4, width=60)
         widgets["retry_failure_listbox"].pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         widgets["retry_on_total_failure_actions"] = []
-
         failure_btns = ttk.Frame(retry_frame)
         failure_btns.pack(side=tk.LEFT, fill=tk.Y)
         ttk.Button(failure_btns, text="Add...", command=lambda: self.open_action_dialog(None), width=12).pack(fill=tk.X, pady=(0, 5))
@@ -496,7 +456,6 @@ class BackupApp:
 
         timeout_frame = ttk.LabelFrame(self.retry_settings_tab, text="Total Timeout", padding=10)
         timeout_frame.pack(fill=tk.X, pady=(0, 10))
-
         ttk.Label(timeout_frame, text="Timeout (minutes):").pack(side=tk.LEFT, padx=(0, 10))
         widgets["total_timeout_minutes_var"] = tk.StringVar(value="0")
         ttk.Entry(timeout_frame, textvariable=widgets["total_timeout_minutes_var"], width=10).pack(side=tk.LEFT)
@@ -508,48 +467,37 @@ class BackupApp:
     def _load_profile_to_widgets(self, profile_name):
         if profile_name not in self.settings["profiles"]:
             return
-
         self.current_profile_name = profile_name
         profile_data = self.settings["profiles"][profile_name]
         w = self.profile_widgets
 
         # Main tab
         w["enabled_var"].set(profile_data.get("enabled", False))
-
         w["source_listbox"].delete(0, tk.END)
         for path in profile_data.get("source_dirs", []):
             w["source_listbox"].insert(tk.END, path)
-
         w["backup_entry"].delete(0, tk.END)
         w["backup_entry"].insert(0, profile_data.get("backup_dir", ""))
-
         w["skip_links_var"].set(profile_data.get("skip_links", True))
         w["auto_start_backup_var"].set(profile_data.get("auto_start_backup", False))
         w["schedule_var"].set(profile_data.get("backup_schedule", "None"))
-
         w["custom_time_entry"].delete(0, tk.END)
         w["custom_time_entry"].insert(0, profile_data.get("custom_time", ""))
-
         w["weekly_time_entry"].delete(0, tk.END)
         w["weekly_time_entry"].insert(0, profile_data.get("weekly_time", "23:00"))
-
         w["exclude_entry"].delete(0, tk.END)
         w["exclude_entry"].insert(0, profile_data.get("exclude_patterns", ""))
-
         selected_days = profile_data.get("weekly_days", ["Monday"])
         for day, var in w["weekly_day_vars"].items():
             var.set(day in selected_days)
-
         self._update_schedule_visibility()
 
         # Advanced tab: Process Control
         pc = profile_data.get("process_control", {})
         w["pc_enabled_var"].set(pc.get("enabled", False))
-
         w["pc_close_listbox"].delete(0, tk.END)
         for proc in pc.get("close_before", []):
             w["pc_close_listbox"].insert(tk.END, proc)
-
         w["pc_close_mode_var"].set(pc.get("close_mode", "graceful_then_force"))
         w["pc_graceful_timeout_var"].set(str(pc.get("graceful_timeout_sec", 10)))
         w["pc_on_close_failure_var"].set(pc.get("on_close_failure", "abort"))
@@ -560,11 +508,9 @@ class BackupApp:
         w["retry_enabled_var"].set(retry.get("enabled", False))
         w["retry_max_attempts_var"].set(str(retry.get("max_attempts", 3)))
         w["retry_interval_seconds_var"].set(str(retry.get("interval_seconds", 300)))
-
         retry_on_list = retry.get("retry_on", [])
         for opt, var in w["retry_on_vars"].items():
             var.set(opt in retry_on_list)
-
         w["retry_on_total_failure_actions"] = copy.deepcopy(retry.get("on_total_failure", []))
         self._update_failure_listbox()
 
@@ -573,17 +519,16 @@ class BackupApp:
 
         self.update_profile_status(profile_name)
         self._update_custom_time_hint()
+        self._refresh_log_display(profile_name)
 
     def _update_schedule_visibility(self):
         w = self.profile_widgets
         value = w["schedule_var"].get()
-
         w["custom_time_entry"].grid_remove()
         w["custom_hint_label"].grid_remove()
         w["weekly_time_entry"].grid_remove()
         w["weekly_days_frame"].grid_remove()
         w["weekly_hint_label"].grid_remove()
-
         if value == "Custom":
             w["custom_time_entry"].grid()
             w["custom_hint_label"].grid()
@@ -600,11 +545,9 @@ class BackupApp:
         if not sel:
             return
         new_name = self.profiles_listbox.get(sel[0])
-
         # Сохраняем предыдущий профиль
         if self.current_profile_name and self.current_profile_name != new_name:
             self.save_current_profile_settings()
-
         self._load_profile_to_widgets(new_name)
         self.settings["global"]["active_profile"] = new_name
         self.save_config()
@@ -620,7 +563,6 @@ class BackupApp:
             return
         w = self.profile_widgets
         p = self.settings["profiles"][profile_name]
-
         p["source_dirs"] = list(w["source_listbox"].get(0, tk.END))
         p["backup_dir"] = w["backup_entry"].get()
         p["skip_links"] = w["skip_links_var"].get()
@@ -631,7 +573,6 @@ class BackupApp:
         p["auto_start_backup"] = w["auto_start_backup_var"].get()
         p["weekly_time"] = w["weekly_time_entry"].get()
         p["weekly_days"] = [day for day, var in w["weekly_day_vars"].items() if var.get()]
-
         p["process_control"] = {
             "enabled": w["pc_enabled_var"].get(),
             "close_before": list(w["pc_close_listbox"].get(0, tk.END)),
@@ -640,7 +581,6 @@ class BackupApp:
             "on_close_failure": w["pc_on_close_failure_var"].get(),
             "restore_after": w["pc_restore_after_var"].get()
         }
-
         retry_on = [opt for opt, var in w["retry_on_vars"].items() if var.get()]
         p["retry"] = {
             "enabled": w["retry_enabled_var"].get(),
@@ -649,7 +589,6 @@ class BackupApp:
             "retry_on": retry_on,
             "on_total_failure": w.get("retry_on_total_failure_actions", [])
         }
-
         p["total_timeout_minutes"] = int(w["total_timeout_minutes_var"].get() or 0)
 
     # =========================================================
@@ -665,7 +604,6 @@ class BackupApp:
         names = list(self.settings["profiles"].keys())
         for name in names:
             self.profiles_listbox.insert(tk.END, name)
-
         target = select_name or self.settings["global"].get("active_profile", "Default")
         if target in names:
             idx = names.index(target)
@@ -684,10 +622,13 @@ class BackupApp:
         name = name.strip()
         if not name:
             return
+        ok, err = validate_profile_name(name)
+        if not ok:
+            messagebox.showerror("Error", f"Invalid profile name: {err}")
+            return
         if name in self.settings["profiles"]:
             messagebox.showerror("Error", f"Profile '{name}' already exists.")
             return
-
         self.settings["profiles"][name] = {
             "source_dirs": [], "backup_dir": "", "skip_links": True,
             "backup_schedule": "None", "custom_time": "", "exclude_patterns": "",
@@ -705,7 +646,6 @@ class BackupApp:
         if old_name == "Default":
             messagebox.showwarning("Warning", "The 'Default' profile cannot be renamed.")
             return
-
         new_name = simpledialog.askstring("Rename Profile", f"Enter new name for '{old_name}':",
                                           parent=self.root, initialvalue=old_name)
         if not new_name:
@@ -713,19 +653,20 @@ class BackupApp:
         new_name = new_name.strip()
         if not new_name or new_name == old_name:
             return
+        ok, err = validate_profile_name(new_name)
+        if not ok:
+            messagebox.showerror("Error", f"Invalid profile name: {err}")
+            return
         if new_name in self.settings["profiles"]:
             messagebox.showerror("Error", f"Profile '{new_name}' already exists.")
             return
-
         # Сохраняем текущие настройки перед переименованием
         self.save_current_profile_settings()
-
         self.settings["profiles"][new_name] = self.settings["profiles"].pop(old_name)
         self.profile_state[new_name] = self.profile_state.pop(old_name)
-
         if self.settings["global"].get("active_profile") == old_name:
             self.settings["global"]["active_profile"] = new_name
-
+        self.profile_logger.on_profile_renamed(old_name, new_name)
         self.save_config()
         self.setup_schedule()
         self._refresh_profiles_listbox(new_name)
@@ -740,15 +681,17 @@ class BackupApp:
         new_name = new_name.strip()
         if not new_name:
             return
+        ok, err = validate_profile_name(new_name)
+        if not ok:
+            messagebox.showerror("Error", f"Invalid profile name: {err}")
+            return
         if new_name in self.settings["profiles"]:
             messagebox.showerror("Error", f"Profile '{new_name}' already exists.")
             return
-
         self.save_current_profile_settings()
         self.settings["profiles"][new_name] = copy.deepcopy(self.settings["profiles"][src_name])
         self.settings["profiles"][new_name]["enabled"] = False
         self.profile_state[new_name] = {"running": False, "thread": None, "stop_flag": False}
-
         self.save_config()
         self._refresh_profiles_listbox(new_name)
 
@@ -762,13 +705,11 @@ class BackupApp:
             return
         if not messagebox.askyesno("Confirm Delete", f"Delete profile '{name}'?"):
             return
-
         del self.settings["profiles"][name]
         self.profile_state.pop(name, None)
-
+        self.profile_logger.on_profile_deleted(name)
         if self.settings["global"].get("active_profile") == name:
             self.settings["global"]["active_profile"] = "Default"
-
         self.save_config()
         self.setup_schedule()
         self._refresh_profiles_listbox()
@@ -795,7 +736,8 @@ class BackupApp:
         self.save_config()
         self.setup_schedule()
         self.update_profile_status(name)
-        self.update_log(f"Profile '{name}' {'enabled' if enabled else 'disabled'}")
+        self.update_log(f"Profile '{name}' {'enabled' if enabled else 'disabled'}",
+                        profile_name=name)
 
     def add_source(self):
         directory = filedialog.askdirectory()
@@ -857,7 +799,6 @@ class BackupApp:
     def open_action_dialog(self, edit_index):
         w = self.profile_widgets
         actions = w.get("retry_on_total_failure_actions", [])
-
         if edit_index == "selected":
             sel = w["retry_failure_listbox"].curselection()
             if not sel:
@@ -918,12 +859,10 @@ class BackupApp:
                 new_action["log_output"] = log_output_var.get()
             else:
                 new_action["message"] = message_var.get()
-
             if edit_index is not None and isinstance(edit_index, int):
                 actions[edit_index] = new_action
             else:
                 actions.append(new_action)
-
             w["retry_on_total_failure_actions"] = actions
             self._update_failure_listbox()
             self.save_current_profile_settings()
@@ -963,23 +902,29 @@ class BackupApp:
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
+
         frame = ttk.Frame(dialog, padding=20)
         frame.pack(fill=tk.BOTH, expand=True)
+
         autorun_var = tk.BooleanVar(value=self.check_autorun())
         start_min_var = tk.BooleanVar(value=self.settings["global"].get("start_minimized", False))
         log_file_var = tk.BooleanVar(value=self.settings["global"].get("log_to_file", True))
         theme_var = tk.StringVar(value=self.settings["global"].get("theme", "light"))
+
         ttk.Checkbutton(frame, text="Run at Windows startup", variable=autorun_var).pack(anchor=tk.W, pady=5)
         ttk.Checkbutton(frame, text="Start minimized", variable=start_min_var).pack(anchor=tk.W, pady=5)
         ttk.Checkbutton(frame, text="Save log to file", variable=log_file_var).pack(anchor=tk.W, pady=5)
+
         theme_frame = ttk.Frame(frame)
         theme_frame.pack(fill=tk.X, pady=(5, 0))
         ttk.Label(theme_frame, text="Theme:").pack(side=tk.LEFT, padx=(0, 10))
         theme_combo = ttk.Combobox(theme_frame, textvariable=theme_var,
                                 values=["light", "dark"], state="readonly", width=10)
         theme_combo.pack(side=tk.LEFT)
+
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=(20, 0))
+
         def on_ok():
             # Autorun
             if autorun_var.get() != self.check_autorun():
@@ -995,6 +940,7 @@ class BackupApp:
             self.prefs_theme_var.set(new_theme)
             self.save_config()
             dialog.destroy()
+
         ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT, padx=(0, 5))
 
@@ -1049,7 +995,6 @@ class BackupApp:
     def _set_profile_running(self, profile_name, running):
         state = self.profile_state.setdefault(profile_name, {"running": False, "thread": None, "stop_flag": False})
         state["running"] = running
-
         if profile_name == self.current_profile_name:
             w = self.profile_widgets
             if running:
@@ -1058,33 +1003,58 @@ class BackupApp:
             else:
                 w["start_btn"].config(state=tk.NORMAL)
                 w["stop_btn"].config(state=tk.DISABLED)
-
         self.update_profile_status(profile_name)
 
     # =========================================================
     # ======================= LOGGING =========================
     # =========================================================
-    def update_log(self, message):
+    def update_log(self, message, profile_name=None):
+        """Логирует сообщение.
+        Если profile_name задан — пишет в UI (если профиль активен) и в лог этого профиля.
+        Если None — пишет в UI и во ВСЕ логи профилей (системные сообщения).
+        """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_line = f"[{timestamp}] {message}\n"
-        self.log_queue.put(log_line)
+        self.log_queue.put((log_line, profile_name))
         if self.settings["global"].get("log_to_file", False):
-            self.logger.info(message)
+            self.profile_logger.log(message, profile_name)
 
     def _flush_log_ui(self):
-        lines = []
+        items = []
         try:
             while True:
-                lines.append(self.log_queue.get_nowait())
+                items.append(self.log_queue.get_nowait())
         except queue.Empty:
             pass
-        if lines and hasattr(self, "log_display"):
+        if items and hasattr(self, "log_display"):
             try:
-                self.log_display.insert(tk.END, "".join(lines))
-                self.log_display.see(tk.END)
+                current = self.current_profile_name
+                lines_to_add = []
+                for line, pname in items:
+                    # Показываем в UI, если:
+                    # - это системное сообщение (pname is None), или
+                    # - это сообщение для текущего активного профиля
+                    if pname is None or pname == current:
+                        lines_to_add.append(line)
+                if lines_to_add:
+                    self.log_display.insert(tk.END, "".join(lines_to_add))
+                    self.log_display.see(tk.END)
             except tk.TclError:
                 pass
         self.root.after(1000, self._flush_log_ui)
+
+    def _refresh_log_display(self, profile_name):
+        """Перечитывает лог указанного профиля в UI (при переключении профиля)."""
+        if not hasattr(self, "log_display"):
+            return
+        try:
+            self.log_display.delete(1.0, tk.END)
+            lines = self.profile_logger.read_last_lines(profile_name, 10000)
+            for line in lines:
+                self.log_display.insert(tk.END, line)
+            self.log_display.see(tk.END)
+        except tk.TclError:
+            pass
 
     # =========================================================
     # ====================== BACKUP ===========================
@@ -1106,13 +1076,12 @@ class BackupApp:
         if not state:
             return
         if state.get("running", False):
-            self.update_log(f"Profile '{profile_name}': backup already running, skipping.")
+            self.update_log(f"Profile '{profile_name}': backup already running, skipping.",
+                            profile_name=profile_name)
             return
-
         profile = self.settings["profiles"].get(profile_name, {})
         source_dirs = profile.get("source_dirs", [])
         backup_dir = profile.get("backup_dir", "")
-
         if not source_dirs:
             if show_dialog:
                 messagebox.showerror("Error", f"No source directories specified in profile '{profile_name}'.")
@@ -1121,15 +1090,13 @@ class BackupApp:
             if show_dialog:
                 messagebox.showerror("Error", f"No backup directory specified in profile '{profile_name}'.")
             return
-
         if not self.check_backup_dir_available(backup_dir):
             msg = (f"Target path is not available: '{backup_dir}' "
                    f"(profile '{profile_name}'). Waiting for next cycle.")
-            self.update_log(msg)
+            self.update_log(msg, profile_name=profile_name)
             if show_dialog:
                 messagebox.showwarning("Backup Skipped", msg)
             return
-
         free_bytes = self._get_free_space(backup_dir)
         if free_bytes is not None and free_bytes < MIN_FREE_BYTES:
             free_gb = free_bytes / (1024 ** 3)
@@ -1138,14 +1105,14 @@ class BackupApp:
                                            f"Only {free_gb:.2f} GB free on target disk.\nContinue backup?"):
                     return
             else:
-                self.update_log(f"Low disk space on target: {free_gb:.2f} GB free. Skipping.")
+                self.update_log(f"Low disk space on target: {free_gb:.2f} GB free. Skipping.",
+                                profile_name=profile_name)
                 return
-
         self.save_config()
         state["stop_flag"] = False
         self._set_profile_running(profile_name, True)
-        self.update_log(f"=== Starting backup for profile '{profile_name}' ===")
-
+        self.update_log(f"=== Starting backup for profile '{profile_name}' ===",
+                        profile_name=profile_name)
         t = threading.Thread(target=self.run_backup, args=(profile_name,), daemon=True)
         state["thread"] = t
         t.start()
@@ -1154,7 +1121,8 @@ class BackupApp:
         state = self.profile_state.get(profile_name)
         if state:
             state["stop_flag"] = True
-            self.update_log(f"Backup stopped by user for profile '{profile_name}'.")
+            self.update_log(f"Backup stopped by user for profile '{profile_name}'.",
+                            profile_name=profile_name)
             self._set_profile_running(profile_name, False)
 
     def start_all_backups(self):
@@ -1182,14 +1150,12 @@ class BackupApp:
         backup_dir = profile.get("backup_dir", "")
         skip_links = profile.get("skip_links", True)
         exclude_patterns_str = profile.get("exclude_patterns", "")
-
         retry_config = profile.get("retry", {})
         retry_enabled = retry_config.get("enabled", False)
         max_attempts = retry_config.get("max_attempts", 3) if retry_enabled else 1
         interval_seconds = retry_config.get("interval_seconds", 300)
         retry_on = retry_config.get("retry_on", [])
         on_total_failure = retry_config.get("on_total_failure", [])
-
         pc_config = profile.get("process_control", {})
         pc_enabled = pc_config.get("enabled", False)
         close_before = pc_config.get("close_before", [])
@@ -1197,49 +1163,54 @@ class BackupApp:
         graceful_timeout = pc_config.get("graceful_timeout_sec", 10)
         on_close_failure = pc_config.get("on_close_failure", "abort")
         restore_after = pc_config.get("restore_after", "only_if_was_running")
-
         total_timeout_minutes = profile.get("total_timeout_minutes", 0)
+
         closed_processes = {}
 
         for attempt in range(1, max_attempts + 1):
             if state.get("stop_flag", False):
-                self.update_log(f"[{profile_name}] Backup stopped by user.")
+                self.update_log(f"[{profile_name}] Backup stopped by user.",
+                                profile_name=profile_name)
                 break
-
-            self.update_log(f"[{profile_name}] === Attempt {attempt}/{max_attempts} ===")
+            self.update_log(f"[{profile_name}] === Attempt {attempt}/{max_attempts} ===",
+                            profile_name=profile_name)
 
             if pc_enabled and close_before:
-                self.update_log(f"[{profile_name}] Closing processes before backup...")
+                self.update_log(f"[{profile_name}] Closing processes before backup...",
+                                profile_name=profile_name)
                 for proc_name in close_before:
                     from process_manager import close_process
                     success, exe_path = close_process(proc_name, mode=close_mode, timeout=graceful_timeout)
                     if success:
                         if exe_path:
-                            # Процесс был запущен и мы его закрыли — запомним для восстановления после бэкапа
                             closed_processes[proc_name] = exe_path
-                            self.update_log(f"[{profile_name}] Closed: {proc_name}")
+                            self.update_log(f"[{profile_name}] Closed: {proc_name}",
+                                            profile_name=profile_name)
                         else:
-                            # Процесс уже был закрыт (например, после предыдущей попытки) — это успех,
-                            # но восстанавливать его не нужно, т.к. мы его не закрывали
-                            self.update_log(f"[{profile_name}] Already closed: {proc_name}")
+                            self.update_log(f"[{profile_name}] Already closed: {proc_name}",
+                                            profile_name=profile_name)
                     else:
-                        self.update_log(f"[{profile_name}] Failed to close: {proc_name}")
+                        self.update_log(f"[{profile_name}] Failed to close: {proc_name}",
+                                        profile_name=profile_name)
                         if on_close_failure == "abort":
                             error_msg = f"Failed to close process '{proc_name}'"
                             error_type = "process_close_failed"
                             error_logger.log_error(profile_name, error_type, error_msg, attempt, max_attempts)
-                            self.update_log(f"[{profile_name}] Aborting due to process close failure.")
+                            self.update_log(f"[{profile_name}] Aborting due to process close failure.",
+                                            profile_name=profile_name)
                             if attempt == max_attempts or not retry_enabled:
                                 self._execute_failure_actions(profile_name, on_total_failure)
                             self._restore_processes(profile_name, closed_processes, restore_after)
                             self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
                             return
                         else:
-                            self.update_log(f"[{profile_name}] Continuing despite process close failure.")
+                            self.update_log(f"[{profile_name}] Continuing despite process close failure.",
+                                            profile_name=profile_name)
 
             start_time = time.time()
             total_stats = {"files_copied": 0, "files_skipped": 0, "total_size_mb": 0, "errors": 0}
             all_copied_files = []
+            all_error_details = []
             timeout_exceeded = False
 
             try:
@@ -1250,45 +1221,53 @@ class BackupApp:
                         elapsed_minutes = (time.time() - start_time) / 60
                         if elapsed_minutes >= total_timeout_minutes:
                             timeout_exceeded = True
-                            self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).")
+                            self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).",
+                                            profile_name=profile_name)
                             break
-
-                    stats = backup_saves(source_dir, backup_dir, skip_links, exclude_patterns_str,
-                                         source_dirs, state, log=self.update_log)
+                    stats = backup_saves(
+                        source_dir, backup_dir, skip_links, exclude_patterns_str,
+                        source_dirs, state,
+                        log=lambda m: self.update_log(m, profile_name=profile_name),
+                    )
                     for key in total_stats:
                         total_stats[key] += stats.get(key, 0)
+                    all_error_details.extend(stats.get("error_details", []))
                     new_files = stats.get("copied_files", [])
                     if len(all_copied_files) < MAX_COPIED_LIST:
                         room = MAX_COPIED_LIST - len(all_copied_files)
                         all_copied_files.extend(new_files[:room])
                     total_stats["total_copied_count"] = total_stats.get("total_copied_count", 0) + len(new_files)
-
                     if total_timeout_minutes > 0:
                         elapsed_minutes = (time.time() - start_time) / 60
                         if elapsed_minutes >= total_timeout_minutes:
                             timeout_exceeded = True
-                            self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).")
+                            self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).",
+                                            profile_name=profile_name)
                             break
 
                 elapsed_time = time.time() - start_time
                 speed = total_stats["total_size_mb"] / elapsed_time if elapsed_time > 0 else 0
-
                 error_types = self._classify_backup_errors(total_stats, timeout_exceeded, state.get("stop_flag", False))
 
                 if state.get("stop_flag", False):
-                    self.update_log(f"[{profile_name}] Backup stopped.")
+                    self.update_log(f"[{profile_name}] Backup stopped.",
+                                    profile_name=profile_name)
                     self._restore_processes(profile_name, closed_processes, restore_after)
                     self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
                     return
 
                 if error_types:
                     error_msg = ", ".join(error_types)
-                    error_logger.log_error(profile_name, error_types[0], error_msg, attempt, max_attempts)
-                    self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}")
-
+                    error_logger.log_error(
+                        profile_name, error_types[0], error_msg,
+                        attempt, max_attempts, details=all_error_details or None,
+                    )
+                    self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}",
+                                    profile_name=profile_name)
                     should_retry = retry_enabled and any(et in retry_on for et in error_types)
                     if should_retry and attempt < max_attempts:
-                        self.update_log(f"[{profile_name}] Waiting {interval_seconds} seconds before retry...")
+                        self.update_log(f"[{profile_name}] Waiting {interval_seconds} seconds before retry...",
+                                        profile_name=profile_name)
                         for _ in range(interval_seconds):
                             if state.get("stop_flag", False):
                                 break
@@ -1304,8 +1283,7 @@ class BackupApp:
                            f"Errors occurred: {total_stats['errors']}\n"
                            f"Time elapsed: {elapsed_time:.2f} seconds\n"
                            f"Average speed: {speed:.2f} MB/s")
-                    self.update_log(msg)
-
+                    self.update_log(msg, profile_name=profile_name)
                     total_count = total_stats.get("total_copied_count", total_stats["files_copied"])
                     if all_copied_files:
                         summary = f"\n=== Copied files ({total_count}) ===\n"
@@ -1313,20 +1291,25 @@ class BackupApp:
                             summary += f"• {f}\n"
                         if total_count > len(all_copied_files):
                             summary += f"... and {total_count - len(all_copied_files)} more files (list truncated)\n"
-                        self.update_log(summary)
+                        self.update_log(summary, profile_name=profile_name)
                     else:
-                        self.update_log(f"\n=== [{profile_name}] Copied files: none (all files are up to date) ===\n")
+                        self.update_log(f"\n=== [{profile_name}] Copied files: none (all files are up to date) ===\n",
+                                        profile_name=profile_name)
                     break
 
             except Exception as e:
                 error_msg = str(e)
                 error_type = "copy_errors"
-                error_logger.log_error(profile_name, error_type, error_msg, attempt, max_attempts)
-                self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}")
-
+                error_logger.log_error(
+                    profile_name, error_type, error_msg,
+                    attempt, max_attempts, details=all_error_details or None,
+                )
+                self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}",
+                                profile_name=profile_name)
                 should_retry = retry_enabled and error_type in retry_on
                 if should_retry and attempt < max_attempts:
-                    self.update_log(f"[{profile_name}] Waiting {interval_seconds} seconds before retry...")
+                    self.update_log(f"[{profile_name}] Waiting {interval_seconds} seconds before retry...",
+                                    profile_name=profile_name)
                     for _ in range(interval_seconds):
                         if state.get("stop_flag", False):
                             break
@@ -1349,19 +1332,23 @@ class BackupApp:
             return
         if not closed_processes:
             return
-        self.update_log(f"[{profile_name}] Restoring processes...")
+        self.update_log(f"[{profile_name}] Restoring processes...",
+                        profile_name=profile_name)
         from process_manager import start_process
         for proc_name, exe_path in closed_processes.items():
             if restore_after == "only_if_was_running" or restore_after == "always":
                 if start_process(exe_path):
-                    self.update_log(f"[{profile_name}] Restored: {proc_name}")
+                    self.update_log(f"[{profile_name}] Restored: {proc_name}",
+                                    profile_name=profile_name)
                 else:
-                    self.update_log(f"[{profile_name}] Failed to restore: {proc_name}")
+                    self.update_log(f"[{profile_name}] Failed to restore: {proc_name}",
+                                    profile_name=profile_name)
 
     def _execute_failure_actions(self, profile_name, actions):
         if not actions:
             return
-        self.update_log(f"[{profile_name}] Executing failure actions...")
+        self.update_log(f"[{profile_name}] Executing failure actions...",
+                        profile_name=profile_name)
         for action in actions:
             action_type = action.get("action")
             if action_type == "run_script":
@@ -1382,11 +1369,14 @@ class BackupApp:
             result = subprocess.run([script_path], capture_output=log_output, text=True, timeout=60)
             if log_output:
                 if result.stdout:
-                    self.update_log(f"[{profile_name}] Script output:\n{result.stdout}")
+                    self.update_log(f"[{profile_name}] Script output:\n{result.stdout}",
+                                    profile_name=profile_name)
                 if result.stderr:
-                    self.update_log(f"[{profile_name}] Script errors:\n{result.stderr}")
+                    self.update_log(f"[{profile_name}] Script errors:\n{result.stderr}",
+                                    profile_name=profile_name)
         except Exception as e:
-            self.update_log(f"[{profile_name}] Failed to run script '{script_path}': {e}")
+            self.update_log(f"[{profile_name}] Failed to run script '{script_path}': {e}",
+                            profile_name=profile_name)
 
     def _show_failure_message(self, profile_name, message):
         if not hasattr(self, '_failure_message_windows'):
@@ -1461,10 +1451,8 @@ class BackupApp:
             if self.sched_thread.is_alive():
                 self.update_log("[WARNING] Scheduler thread did not stop in 2s, continuing anyway")
         self.sched_stop.clear()
-
         with self.schedule_lock:
             schedule.clear()
-
         for profile_name, profile in self.settings["profiles"].items():
             if not profile.get("enabled", False):
                 continue
@@ -1474,8 +1462,8 @@ class BackupApp:
             try:
                 self._register_schedule(profile_name, profile)
             except Exception as e:
-                self.update_log(f"Error registering schedule for '{profile_name}': {e}")
-
+                self.update_log(f"Error registering schedule for '{profile_name}': {e}",
+                                profile_name=profile_name)
         self.sched_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         self.sched_thread.start()
 
@@ -1485,7 +1473,6 @@ class BackupApp:
             return
         profile = self.settings["profiles"].get(self.current_profile_name, {})
         sched = profile.get("backup_schedule")
-
         if sched == "Custom" and "custom_hint_label" in w:
             custom = profile.get("custom_time", "")
             ok, err = validate_custom_time(custom)
@@ -1513,34 +1500,42 @@ class BackupApp:
             if len(parts) >= 2:
                 time_str = parts[1]
                 schedule.every().day.at(time_str).do(self.scheduled_backup, profile_name)
-                self.update_log(f"Schedule (profile '{profile_name}'): daily at {time_str}")
+                self.update_log(f"Schedule (profile '{profile_name}'): daily at {time_str}",
+                                profile_name=profile_name)
             else:
-                self.update_log(f"Error: invalid schedule format for '{profile_name}': '{sched}'")
+                self.update_log(f"Error: invalid schedule format for '{profile_name}': '{sched}'",
+                                profile_name=profile_name)
         elif sched == "Custom":
             custom = profile.get("custom_time", "")
             ok, err = validate_custom_time(custom)
             if not ok:
-                self.update_log(f"Error: {err} for '{profile_name}': '{custom}'")
+                self.update_log(f"Error: {err} for '{profile_name}': '{custom}'",
+                                profile_name=profile_name)
             elif ":" in custom:
                 schedule.every().day.at(custom).do(self.scheduled_backup, profile_name)
-                self.update_log(f"Schedule (profile '{profile_name}'): daily at {custom}")
+                self.update_log(f"Schedule (profile '{profile_name}'): daily at {custom}",
+                                profile_name=profile_name)
             else:
                 schedule.every(int(custom)).minutes.do(self.scheduled_backup, profile_name)
-                self.update_log(f"Schedule (profile '{profile_name}'): every {custom} minutes")
+                self.update_log(f"Schedule (profile '{profile_name}'): every {custom} minutes",
+                                profile_name=profile_name)
         elif sched == "Weekly":
             weekly_days = profile.get("weekly_days", [])
             weekly_time = profile.get("weekly_time", "")
             if not weekly_days:
-                self.update_log(f"Error: no days selected for weekly schedule for '{profile_name}'")
+                self.update_log(f"Error: no days selected for weekly schedule for '{profile_name}'",
+                                profile_name=profile_name)
                 return
             ok, err = validate_hhmm(weekly_time)
             if not ok:
-                self.update_log(f"Error: {err} for '{profile_name}': '{weekly_time}'")
+                self.update_log(f"Error: {err} for '{profile_name}': '{weekly_time}'",
+                                profile_name=profile_name)
                 return
             for day in weekly_days:
                 getattr(schedule.every(), day.lower()).at(weekly_time).do(self.scheduled_backup, profile_name)
             days_str = ", ".join(weekly_days)
-            self.update_log(f"Schedule (profile '{profile_name}'): weekly on {days_str} at {weekly_time}")
+            self.update_log(f"Schedule (profile '{profile_name}'): weekly on {days_str} at {weekly_time}",
+                            profile_name=profile_name)
 
     def run_scheduler(self):
         try:
@@ -1565,7 +1560,8 @@ class BackupApp:
             return
         state = self.profile_state.get(profile_name, {})
         if state.get("running", False):
-            self.update_log(f"[{profile_name}] Scheduled backup skipped: already running.")
+            self.update_log(f"[{profile_name}] Scheduled backup skipped: already running.",
+                            profile_name=profile_name)
             return
         self.start_profile_backup(profile_name, show_dialog=False)
 
@@ -1632,7 +1628,6 @@ class BackupApp:
                     pdata["weekly_days"] = ["Monday"]
                 if "weekly_time" not in pdata:
                     pdata["weekly_time"] = "23:00"
-
             if "Default" not in self.settings["profiles"]:
                 self.settings["profiles"]["Default"] = {
                     "source_dirs": [], "backup_dir": "", "skip_links": True,
@@ -1640,7 +1635,6 @@ class BackupApp:
                     "enabled": False, "auto_start_backup": False,
                     "weekly_days": ["Monday"], "weekly_time": "23:00",
                 }
-
             for pname, pdata in self.settings["profiles"].items():
                 if "process_control" not in pdata:
                     pdata["process_control"] = {
@@ -1708,6 +1702,11 @@ class BackupApp:
 
     def _shutdown(self):
         log_exit_or_crash("Normal shutdown initiated by user (exit_app called)")
+        if hasattr(self, "profile_logger"):
+            try:
+                self.profile_logger.close_all()
+            except Exception:
+                pass
         if hasattr(self, "tray_icon") and self.tray_icon:
             try:
                 self.tray_icon.stop()
@@ -1739,15 +1738,12 @@ class BackupApp:
             self._error_summary_window.lift()
             self._error_summary_window.focus_force()
             return
-
         window = tk.Toplevel(self.root)
         window.title("Error Summary")
         window.geometry("700x500")
         window.transient(self.root)
-
         text = scrolledtext.ScrolledText(window, wrap=tk.WORD, font=("Consolas", 9))
         text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
         errors = error_logger.get_last_n_errors(50)
         if errors:
             for err in errors:
@@ -1755,7 +1751,6 @@ class BackupApp:
         else:
             text.insert(tk.END, "No errors recorded.")
         text.config(state=tk.DISABLED)
-
         btn_frame = ttk.Frame(window)
         btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
@@ -1767,7 +1762,6 @@ class BackupApp:
 
         ttk.Button(btn_frame, text="Open full log", command=open_full_log).pack(side=tk.RIGHT)
         self._error_summary_window = window
-
         self.error_indicator.config(text="")
         self.settings["global"]["errors_last_read_pos"] = error_logger.get_file_size()
         self.save_config()

@@ -54,21 +54,29 @@ class ErrorLogger:
         self.logger.addHandler(rotating_handler)
 
     def log_error(self, profile_name, error_type, error_message,
-                  attempt=None, max_attempts=None):
+                  attempt=None, max_attempts=None, details=None):
         """Записывает ошибку в errors.log.
-
         Args:
             profile_name: имя профиля
             error_type: тип ошибки (disk_unavailable, process_close_failed, etc.)
             error_message: детальное сообщение
             attempt: номер текущей попытки (опционально)
             max_attempts: максимальное количество попыток (опционально)
+            details: список строк с подробностями (какой файл, почему) — опционально
         """
         if attempt is not None and max_attempts is not None:
             msg = (f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: "
                    f"{error_type}. {error_message}")
         else:
             msg = f"[{profile_name}] {error_type}: {error_message}"
+
+        if details:
+            max_show = 50
+            shown = details[:max_show]
+            msg += "\n" + "\n".join(f"  • {d}" for d in shown)
+            if len(details) > max_show:
+                msg += f"\n  ... and {len(details) - max_show} more"
+
         self.logger.error(msg)
         # Принудительно сбрасываем буфер, чтобы данные сразу попали в файл
         for handler in self.logger.handlers:
