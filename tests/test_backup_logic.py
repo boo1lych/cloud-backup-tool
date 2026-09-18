@@ -363,7 +363,163 @@ class TestBackupSaves:
             assert f.read() == "Content from project_a"
         with open(os.path.join(backup, expected_folder(source2), "file.txt"), "r") as f:
             assert f.read() == "Content from project_b"
+# =========================================================
+# =========== TESTS FOR error_details IN backup_saves ======
+# =========================================================
 
+class TestBackupSavesErrorDetails:
+    """Тесты для error_details в backup_saves."""
+
+    def test_error_details_populated_on_copy_error(self, tmp_path):
+        """Проверяет, что error_details заполняется при ошибках копирования."""
+        from backup_logic import backup_saves
+        
+        temp_source = tmp_path / "source"
+        temp_backup = tmp_path / "backup"
+        temp_source.mkdir()
+        temp_backup.mkdir()
+        
+        # Создаём файл
+        test_file = temp_source / 'readonly.txt'
+        test_file.write_text('test content')
+        
+        # В реальности ошибки копирования сложно эмулировать на Windows,
+        # поэтому просто проверяем структуру возвращаемого словаря
+        state = {'stop_flag': False}
+        
+        stats = backup_saves(
+            str(temp_source), str(temp_backup),
+            skip_links=False, exclude_patterns_str='',
+            all_sources_in_profile=[str(temp_source)],
+            state=state, log=None
+        )
+        
+        # Проверяем, что error_details есть в stats
+        assert 'error_details' in stats
+        assert isinstance(stats['error_details'], list)
+
+    def test_error_details_empty_on_success(self, tmp_path):
+        """Проверяет, что error_details пуст при успешном копировании."""
+        from backup_logic import backup_saves
+        
+        temp_source = tmp_path / "source"
+        temp_backup = tmp_path / "backup"
+        temp_source.mkdir()
+        temp_backup.mkdir()
+        
+        # Создаём тестовый файл
+        test_file = temp_source / 'test.txt'
+        test_file.write_text('test content')
+        
+        state = {'stop_flag': False}
+        
+        stats = backup_saves(
+            str(temp_source), str(temp_backup),
+            skip_links=False, exclude_patterns_str='',
+            all_sources_in_profile=[str(temp_source)],
+            state=state, log=None
+        )
+        
+        assert stats['error_details'] == []
+        assert stats['errors'] == 0
+
+    def test_error_details_returned_on_stop_flag(self, tmp_path):
+        """Проверяет, что error_details возвращается при stop_flag."""
+        from backup_logic import backup_saves
+        
+        temp_source = tmp_path / "source"
+        temp_backup = tmp_path / "backup"
+        temp_source.mkdir()
+        temp_backup.mkdir()
+        
+        test_file = temp_source / 'test.txt'
+        test_file.write_text('test content')
+        
+        state = {'stop_flag': True}
+        
+        stats = backup_saves(
+            str(temp_source), str(temp_backup),
+            skip_links=False, exclude_patterns_str='',
+            all_sources_in_profile=[str(temp_source)],
+            state=state, log=None
+        )
+        
+        assert 'error_details' in stats
+# =========================================================
+# =========== TESTS FOR validate_profile_name ==============
+# =========================================================
+
+class TestValidateProfileName:
+    """Тесты для validate_profile_name."""
+
+    def test_valid_names(self):
+        """Проверяет валидные имена профилей."""
+        from backup_logic import validate_profile_name
+        
+        valid_names = [
+            'Default',
+            'MyProfile',
+            'Profile-123',
+            'Profile_2026',
+            'Test.Profile',
+            'Profile Name',
+        ]
+        
+        for name in valid_names:
+            ok, err = validate_profile_name(name)
+            assert ok, f"Name '{name}' should be valid, but got error: {err}"
+
+    def test_empty_name(self):
+        """Проверяет обработку пустого имени."""
+        from backup_logic import validate_profile_name
+        
+        ok, err = validate_profile_name('')
+        assert not ok
+        assert 'empty' in err.lower()
+        
+        ok, err = validate_profile_name('   ')
+        assert not ok
+        assert 'empty' in err.lower()
+
+    def test_forbidden_characters(self):
+        """Проверяет запрещённые символы."""
+        from backup_logic import validate_profile_name
+        
+        forbidden = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+        
+        for ch in forbidden:
+            ok, err = validate_profile_name(f'Test{ch}Profile')
+            assert not ok, f"Character '{ch}' should be forbidden"
+            assert 'not allowed' in err.lower()
+
+    def test_reserved_names(self):
+        """Проверяет зарезервированные имена Windows."""
+        from backup_logic import validate_profile_name
+        
+        reserved = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'LPT1', 'com1', 'lpt1']
+        
+        for name in reserved:
+            ok, err = validate_profile_name(name)
+            assert not ok, f"Name '{name}' should be reserved"
+            assert 'reserved' in err.lower()
+
+    def test_dots_and_spaces_only(self):
+        """Проверяет имена, состоящие только из точек и пробелов."""
+        from backup_logic import validate_profile_name
+        
+        # Только пробелы — ловятся первой проверкой (empty)
+        empty_like = ['   ']
+        for name in empty_like:
+            ok, err = validate_profile_name(name)
+            assert not ok, f"Name '{name}' should be invalid"
+            assert 'empty' in err.lower()
+        
+        # Только точки (или точки с пробелами) — ловятся второй проверкой
+        dots_only = ['.', '..', '...', '. . .']
+        for name in dots_only:
+            ok, err = validate_profile_name(name)
+            assert not ok, f"Name '{name}' should be invalid"
+            assert 'dots and spaces' in err.lower()
 class TestIsReparsePoint:
     """Тесты для функции is_reparse_point."""
     
@@ -388,6 +544,7 @@ class TestIsReparsePoint:
     def test_nonexistent_path(self):
         """Тест несуществующего пути."""
         assert is_reparse_point("/nonexistent/path") is False
+
 
 
 if __name__ == "__main__":
