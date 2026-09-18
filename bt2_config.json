@@ -3,9 +3,9 @@
   "autorun": false,
   "start_minimized": false,
   "log_to_file": true,
-  "active_profile": "Default",
+  "active_profile": "Outlook",
   "errors_last_read_pos": 1016,
-  "profiles_collapsed": true
+  "profiles_collapsed": false
  },
  "profiles": {
   "Default": {
