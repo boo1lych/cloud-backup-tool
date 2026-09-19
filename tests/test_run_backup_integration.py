@@ -55,8 +55,9 @@ class TestRunBackupIntegration:
         app.root.after = Mock()
         return app
 
+    @patch('CloudBackupTool.os.path.exists', return_value=True)
     @patch('CloudBackupTool.backup_saves')
-    def test_successful_backup_no_retry(self, mock_backup, app):
+    def test_successful_backup_no_retry(self, mock_backup, mock_exists, app):
         """Успешный бэкап без retry."""
         mock_backup.return_value = {
             "files_copied": 10,
@@ -66,8 +67,12 @@ class TestRunBackupIntegration:
             "copied_files": ["file1.txt", "file2.txt"]
         }
         
+        # 1024**3 = 1 073 741 824 байт (1 ГиБ). Возвращаем 2 ГиБ, чтобы точно пройти проверку MIN_FREE_BYTES.
+        app._get_free_space = Mock(return_value=2 * 1024**3)
+        app.check_backup_dir_available = Mock(return_value=True)
+
         app.run_backup("TestProfile")
-        
+
         # Должен вызвать backup_saves один раз
         assert mock_backup.call_count == 1
         # Должен залогировать успех
@@ -94,15 +99,20 @@ class TestRunBackupIntegration:
         # Должен залогировать retry
         assert any("Waiting" in str(call) and "retry" in str(call) for call in app.update_log.call_args_list)
 
+    @patch('CloudBackupTool.os.path.exists', return_value=True)
     @patch('CloudBackupTool.backup_saves')
     @patch('CloudBackupTool.error_logger.log_error')
-    def test_retry_exhausted(self, mock_log_error, mock_backup, app):
+    def test_retry_exhausted(self, mock_log_error, mock_backup, mock_exists, app):
         """Все попытки исчерпаны."""
         # Все попытки — ошибка
         mock_backup.return_value = {
             "files_copied": 0, "files_skipped": 0, "total_size_mb": 0, "errors": 5, "copied_files": []
         }
         
+        # Исправлено: 2 ГиБ вместо 1000000000 байт
+        app._get_free_space = Mock(return_value=2 * 1024**3)
+        app.check_backup_dir_available = Mock(return_value=True)
+
         app.settings["profiles"]["TestProfile"]["retry"]["enabled"] = True
         app.settings["profiles"]["TestProfile"]["retry"]["max_attempts"] = 2
         app.settings["profiles"]["TestProfile"]["retry"]["retry_on"] = ["copy_errors"]
@@ -110,9 +120,9 @@ class TestRunBackupIntegration:
         app.settings["profiles"]["TestProfile"]["retry"]["on_total_failure"] = [
             {"action": "show_message", "message": "Failed"}
         ]
-        
+
         app.run_backup("TestProfile")
-        
+
         # Должен вызвать backup_saves два раза
         assert mock_backup.call_count == 2
         # Должен залогировать ошибку

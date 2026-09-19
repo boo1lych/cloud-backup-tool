@@ -1065,6 +1065,8 @@ class BackupApp:
         try:
             if not os.path.exists(backup_dir):
                 return False
+            if not os.path.isdir(backup_dir):
+                return False
             if not os.access(backup_dir, os.W_OK):
                 return False
             return True
@@ -1247,7 +1249,10 @@ class BackupApp:
 
                 elapsed_time = time.time() - start_time
                 speed = total_stats["total_size_mb"] / elapsed_time if elapsed_time > 0 else 0
-                error_types = self._classify_backup_errors(total_stats, timeout_exceeded, state.get("stop_flag", False))
+                error_types = self._classify_backup_errors(
+                    total_stats, timeout_exceeded, state.get("stop_flag", False),
+                    backup_dir=backup_dir, source_dirs=source_dirs
+                )
 
                 if state.get("stop_flag", False):
                     self.update_log(f"[{profile_name}] Backup stopped.",
@@ -1319,12 +1324,32 @@ class BackupApp:
         self._restore_processes(profile_name, closed_processes, restore_after)
         self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
 
-    def _classify_backup_errors(self, total_stats, timeout_exceeded, stop_flag):
+    def _classify_backup_errors(self, total_stats, timeout_exceeded, stop_flag, 
+                                backup_dir=None, source_dirs=None):
         error_types = []
         if timeout_exceeded:
             error_types.append("timeout_exceeded")
+        
         if total_stats.get("errors", 0) > 0:
             error_types.append("copy_errors")
+        
+        # Проверка доступности диска
+        if backup_dir and not self.check_backup_dir_available(backup_dir):
+            error_types.append("disk_unavailable")
+        
+        # Проверка свободного места
+        if backup_dir:
+            free_bytes = self._get_free_space(backup_dir)
+            if free_bytes is not None and free_bytes < MIN_FREE_BYTES:
+                error_types.append("low_disk_space")
+        
+        # Проверка доступности источников
+        if source_dirs:
+            for src in source_dirs:
+                if not os.path.exists(src):
+                    error_types.append("source_missing")
+                    break
+        
         return error_types
 
     def _restore_processes(self, profile_name, closed_processes, restore_after):

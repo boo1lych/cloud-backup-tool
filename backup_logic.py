@@ -142,6 +142,9 @@ all_sources_in_profile, state, log=None):
     os.makedirs(dest_root, exist_ok=True)
 
     def walk_error(err):
+        nonlocal errors
+        errors += 1
+        error_details.append(f"Directory access error: {err}")
         if log:
             log(f"Error accessing path: {err}")
 

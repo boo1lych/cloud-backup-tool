@@ -67,18 +67,22 @@ class TestCloseProcess:
     def test_graceful_mode_success(self):
         """Graceful закрытие успешно."""
         with patch('process_manager.find_process_by_name') as mock_find, \
-             patch('process_manager.psutil.Process') as mock_proc_class:
-            
+            patch('process_manager.psutil.Process') as mock_proc_class, \
+            patch('process_manager._send_wm_close') as mock_wm_close:
+
             mock_find.return_value = {'name': 'test.exe', 'exe': 'C:\\test.exe', 'pid': 1234}
             mock_proc = Mock()
             mock_proc_class.return_value = mock_proc
             mock_proc.wait.return_value = None
-            
+            mock_wm_close.return_value = True
+
             success, exe_path = close_process('test.exe', mode='graceful', timeout=5)
-            
+
             assert success is True
             assert exe_path == 'C:\\test.exe'
-            mock_proc.terminate.assert_called_once()
+            # Теперь graceful использует WM_CLOSE, а не terminate
+            mock_wm_close.assert_called_once_with(1234)
+            mock_proc.wait.assert_called_once()
 
     def test_graceful_mode_timeout(self):
         """Graceful закрытие с таймаутом."""
@@ -115,19 +119,23 @@ class TestCloseProcess:
     def test_graceful_then_force_mode(self):
         """Graceful then force: сначала graceful, потом force."""
         with patch('process_manager.find_process_by_name') as mock_find, \
-             patch('process_manager.psutil.Process') as mock_proc_class:
-            
+            patch('process_manager.psutil.Process') as mock_proc_class, \
+            patch('process_manager._send_wm_close') as mock_wm_close:
+
             mock_find.return_value = {'name': 'test.exe', 'exe': 'C:\\test.exe', 'pid': 1234}
             mock_proc = Mock()
             mock_proc_class.return_value = mock_proc
+            mock_wm_close.return_value = True
             # Graceful не сработал (таймаут), потом force сработал
             mock_proc.wait.side_effect = [psutil.TimeoutExpired(1234, 2), None]
-            
+
             success, exe_path = close_process('test.exe', mode='graceful_then_force', timeout=2)
-            
+
             assert success is True
             assert exe_path == 'C:\\test.exe'
-            mock_proc.terminate.assert_called_once()
+            # WM_CLOSE вызывается первым
+            mock_wm_close.assert_called_once_with(1234)
+            # Затем kill
             mock_proc.kill.assert_called_once()
 
     def test_process_not_found(self):
