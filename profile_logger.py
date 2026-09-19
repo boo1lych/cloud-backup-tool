@@ -28,10 +28,17 @@ class ProfileLogger:
 
     @staticmethod
     def sanitize_filename(name: str) -> str:
-        """Заменяет недопустимые для имени файла символы на '_'."""
+        """Заменяет недопустимые для имени файла символы на '_' и ограничивает длину."""
         result = name
         for ch in '<>:"/\\|?*':
             result = result.replace(ch, '_')
+        
+        # Ограничиваем длину имени файла (Windows лимит 255 символов)
+        # Оставляем запас для расширения .log
+        max_length = 200
+        if len(result) > max_length:
+            result = result[:max_length]
+        
         return result
 
     def _get_log_file(self, profile_name: str) -> str:
@@ -105,12 +112,12 @@ class ProfileLogger:
 
     def on_profile_renamed(self, old_name: str, new_name: str):
         """Реагирует на переименование профиля.
-        Закрывает старый logger. Пытается переименовать файл лога,
-        если файл с новым именем ещё не существует.
+        Закрывает старый logger. Переименовывает файл лога.
+        Если файл с новым именем уже существует, добавляет суффикс.
         """
         old_file = self._get_log_file(old_name)
         new_file = self._get_log_file(new_name)
-
+        
         with self._lock:
             if old_name in self._loggers:
                 logger = self._loggers.pop(old_name)
@@ -120,9 +127,17 @@ class ProfileLogger:
                     except Exception:
                         pass
                 logger.handlers.clear()
-
-        # Переименовываем файл, если новый не существует
-        if os.path.exists(old_file) and not os.path.exists(new_file):
+        
+        # Переименовываем файл
+        if os.path.exists(old_file):
+            # Если новый файл уже существует, добавляем суффикс
+            if os.path.exists(new_file):
+                base, ext = os.path.splitext(new_file)
+                counter = 1
+                while os.path.exists(f"{base}_{counter}{ext}"):
+                    counter += 1
+                new_file = f"{base}_{counter}{ext}"
+            
             try:
                 os.rename(old_file, new_file)
             except Exception as e:

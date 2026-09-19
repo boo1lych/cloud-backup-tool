@@ -181,29 +181,34 @@ class TestOnProfileRenamed:
         assert os.path.exists(new_file)
 
     def test_on_profile_renamed_no_rename_if_new_exists(self, profile_logger, temp_log_dir):
-        """Проверяет, что файл не переименовывается, если новый уже существует."""
+        """Проверяет, что при конфликте имён файл переименовывается с суффиксом."""
         # Создаём оба файла
         logger1 = profile_logger.get_logger('OldName')
         logger1.info('Old message')
         for handler in logger1.handlers:
             handler.flush()
-        
+
         logger2 = profile_logger.get_logger('NewName')
         logger2.info('New message')
         for handler in logger2.handlers:
             handler.flush()
-        
+
         old_file = os.path.join(temp_log_dir, 'profiles', 'OldName.log')
         new_file = os.path.join(temp_log_dir, 'profiles', 'NewName.log')
-        
+
         assert os.path.exists(old_file)
         assert os.path.exists(new_file)
-        
+
         profile_logger.on_profile_renamed('OldName', 'NewName')
+
+        # Старый файл должен быть переименован с суффиксом
+        renamed_file = os.path.join(temp_log_dir, 'profiles', 'NewName_1.log')
+        assert os.path.exists(renamed_file)
         
-        # Старый файл должен остаться (не переименован)
-        assert os.path.exists(old_file)
-        assert os.path.exists(new_file)
+        # Проверяем, что содержимое перенеслось
+        with open(renamed_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        assert 'Old message' in content
 
 
 class TestOnProfileDeleted:

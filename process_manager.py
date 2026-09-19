@@ -1,22 +1,21 @@
-"""Модуль для управления процессами (за封闭тие/запуск).
+"""Модуль для управления процессами (закрытие/запуск).
 Использует psutil для работы с процессами Windows.
 """
 import subprocess
 import psutil
+import ctypes
 from typing import Optional, Tuple, Dict, Any
-
 
 class ProcessNotFoundError(Exception):
     """Исключение, когда процесс не найден."""
     pass
-
 
 def find_process_by_name(process_name: str) -> Optional[Dict[str, Any]]:
     """Ищет процесс по имени (регистронезависимо).
     
     Args:
         process_name: имя процесса (например, "OUTLOOK.EXE")
-        
+    
     Returns:
         Словарь с информацией о процессе {'name': str, 'exe': str, 'pid': int} или None
     """
@@ -36,17 +35,39 @@ def find_process_by_name(process_name: str) -> Optional[Dict[str, Any]]:
         print(f"Error searching for process '{process_name}': {e}")
         return None
 
+def _send_wm_close(pid: int) -> bool:
+    """Отправляет WM_CLOSE окнам процесса (настоящий graceful shutdown для Windows)."""
+    try:
+        user32 = ctypes.windll.user32
+        WM_CLOSE = 0x0010
+        
+        def enum_windows_callback(hwnd, lparam):
+            window_pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+            if window_pid.value == pid:
+                user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+            return True
+        
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+        callback = WNDENUMPROC(enum_windows_callback)
+        user32.EnumWindows(callback, 0)
+        return True
+    except Exception as e:
+        print(f"Failed to send WM_CLOSE to PID {pid}: {e}")
+        return False
 
 def close_process(process_name: str, mode: str = 'graceful_then_force',
-timeout: int = 10) -> Tuple[bool, Optional[str]]:
+                  timeout: int = 10) -> Tuple[bool, Optional[str]]:
     """Закрывает процесс по имени.
+    
     Args:
         process_name: имя процесса (например, "OUTLOOK.EXE")
         mode: режим закрытия:
-            - 'graceful': мягкое завершение (terminate)
+            - 'graceful': мягкое завершение (WM_CLOSE)
             - 'force': жёсткое завершение (kill)
             - 'graceful_then_force': сначала graceful, потом force
         timeout: таймаут ожидания после graceful (в секундах)
+    
     Returns:
         Tuple[bool, Optional[str]]: (успех, путь к exe или None)
     """
@@ -55,9 +76,9 @@ timeout: int = 10) -> Tuple[bool, Optional[str]]:
         # Процесс уже не запущен — для нашей цели (закрыть перед бэкапом) это успех.
         # Возвращаем None как exe_path, чтобы не пытаться восстанавливать его позже.
         return True, None
+    
     exe_path = proc_info['exe']
     pid = proc_info.get('pid')
-    
     if pid is None:
         return False, None
     
@@ -65,31 +86,34 @@ timeout: int = 10) -> Tuple[bool, Optional[str]]:
         p = psutil.Process(pid)
         
         if mode == 'graceful':
-            p.terminate()  # Рекомендуемый psutil способ для graceful shutdown в Windows
+            # Настоящий graceful shutdown для Windows — WM_CLOSE
+            _send_wm_close(pid)
             try:
                 p.wait(timeout=timeout)
                 return True, exe_path
             except psutil.TimeoutExpired:
                 return False, None
-                
+        
         elif mode == 'force':
             p.kill()
             p.wait(timeout=5)
             return True, exe_path
-            
+        
         elif mode == 'graceful_then_force':
-            p.terminate()
+            # Сначала пробуем WM_CLOSE
+            _send_wm_close(pid)
             try:
                 p.wait(timeout=timeout)
                 return True, exe_path
             except psutil.TimeoutExpired:
+                # Если не закрылся — жёсткое завершение
                 p.kill()
                 p.wait(timeout=5)
                 return True, exe_path
         
         else:
             raise ValueError(f"Unknown close mode: {mode}")
-            
+    
     except psutil.NoSuchProcess:
         # Процесс уже завершён — считаем успехом
         return True, exe_path
@@ -100,14 +124,13 @@ timeout: int = 10) -> Tuple[bool, Optional[str]]:
         print(f"Error closing process '{process_name}': {e}")
         return False, None
 
-
 def start_process(exe_path: str, args: list = None) -> bool:
     """Запускает процесс по пути к exe.
     
     Args:
         exe_path: полный путь к исполняемому файлу
         args: опциональные аргументы командной строки
-        
+    
     Returns:
         bool: True, если запуск успешен
     """
@@ -115,7 +138,6 @@ def start_process(exe_path: str, args: list = None) -> bool:
         cmd = [exe_path]
         if args:
             cmd.extend(args)
-        
         subprocess.Popen(cmd, shell=False)
         return True
     except FileNotFoundError:
