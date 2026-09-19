@@ -103,7 +103,7 @@ goto :pause_exit
 )
 echo   ℹ️  venv314 не найден, используем системный python
 )
-!PYTHON! -c "import schedule, pystray, PIL, sv_ttk, PyInstaller, psutil" >nul 2>nul
+!PYTHON! -c "import schedule, pystray, PIL, sv_ttk, PyInstaller, psutil, requests" >nul 2>nul
 if !ERRORLEVEL! neq 0 (
 echo %YELLOW%⚠️  Некоторые зависимости не установлены. Устанавливаю...%RESET%
 !PYTHON! -m pip install -r requirements.txt
