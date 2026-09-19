@@ -21,6 +21,7 @@ from backup_logic import (
 )
 from error_log import error_logger
 from profile_logger import ProfileLogger
+import error_notifier
 
 MAX_COPIED_LIST = 10000
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -177,6 +178,8 @@ class BackupApp:
         prefs_menu.add_checkbutton(label="Run at Windows startup", variable=self.prefs_autorun_var, command=self._toggle_autorun_from_menu)
         prefs_menu.add_checkbutton(label="Start minimized", variable=self.prefs_start_min_var, command=self._toggle_start_minimized_from_menu)
         prefs_menu.add_checkbutton(label="Save log to file", variable=self.prefs_log_file_var, command=self._toggle_log_to_file_from_menu)
+        prefs_menu.add_separator()
+        prefs_menu.add_command(label="VK Teams Alerts", command=self.open_vk_teams_alerts_settings)
         prefs_menu.add_separator()
         theme_menu = tk.Menu(prefs_menu, tearoff=0)
         theme_menu.add_radiobutton(label="Light", variable=self.prefs_theme_var, value="light", command=self._apply_theme_from_menu)
@@ -944,6 +947,91 @@ class BackupApp:
         ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT, padx=(0, 5))
 
+    def open_vk_teams_alerts_settings(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("VK Teams Alerts")
+        dialog.geometry("520x420")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        cfg = error_notifier.load_config()
+
+        frame = ttk.Frame(dialog, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        enabled_var = tk.BooleanVar(value=cfg.get("enabled", False))
+        ttk.Checkbutton(frame, text="Enable notifications", variable=enabled_var).pack(anchor=tk.W, pady=(0, 10))
+
+        # Bot Token
+        token_frame = ttk.Frame(frame)
+        token_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(token_frame, text="Bot Token:").pack(side=tk.LEFT, padx=(0, 10))
+        token_var = tk.StringVar(value=cfg.get("bot_token", ""))
+        token_entry = ttk.Entry(token_frame, textvariable=token_var, width=40, show="•")
+        token_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Chat IDs
+        chat_frame = ttk.LabelFrame(frame, text="Chat IDs", padding=10)
+        chat_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        chat_listbox = tk.Listbox(chat_frame, height=6, font=("Consolas", 9))
+        chat_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        for cid in cfg.get("chat_ids", []):
+            chat_listbox.insert(tk.END, cid)
+
+        chat_btns = ttk.Frame(chat_frame)
+        chat_btns.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def add_chat_id():
+            cid = simpledialog.askstring("Add Chat ID", "Enter chat ID:", parent=dialog)
+            if cid:
+                cid = cid.strip()
+                if cid and cid not in chat_listbox.get(0, tk.END):
+                    chat_listbox.insert(tk.END, cid)
+
+        def remove_chat_id():
+            sel = list(chat_listbox.curselection())
+            for idx in reversed(sel):
+                chat_listbox.delete(idx)
+
+        ttk.Button(chat_btns, text="Add...", command=add_chat_id, width=10).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(chat_btns, text="Remove", command=remove_chat_id, width=10).pack(fill=tk.X)
+
+        # Test message
+        test_btn = ttk.Button(frame, text="Send Test Message", command=lambda: _send_test())
+        test_btn.pack(anchor=tk.W, pady=(0, 10))
+
+        status_var = tk.StringVar(value="")
+        status_label = ttk.Label(frame, textvariable=status_var, foreground="gray")
+        status_label.pack(anchor=tk.W)
+
+        def _send_test():
+            # Сохраняем текущие значения в конфиг перед тестом
+            temp_cfg = {
+                "enabled": enabled_var.get(),
+                "bot_token": token_var.get().strip(),
+                "chat_ids": list(chat_listbox.get(0, tk.END)),
+            }
+            error_notifier.save_config(temp_cfg)
+            ok, msg = error_notifier.send_test_message()
+            status_var.set(msg)
+            status_label.config(foreground="green" if ok else "red")
+
+        # Buttons
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=(15, 0))
+
+        def on_ok():
+            new_cfg = {
+                "enabled": enabled_var.get(),
+                "bot_token": token_var.get().strip(),
+                "chat_ids": list(chat_listbox.get(0, tk.END)),
+            }
+            error_notifier.save_config(new_cfg)
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT, padx=(0, 5))
+
     def open_about(self):
         messagebox.showinfo("About", "Cloud Backup Tool\nVersion 3.0.0\n\nBackup utility for cloud storage")
 
@@ -1093,22 +1181,38 @@ class BackupApp:
                 messagebox.showerror("Error", f"No backup directory specified in profile '{profile_name}'.")
             return
         if not self.check_backup_dir_available(backup_dir):
-            msg = (f"Target path is not available: '{backup_dir}' "
-                   f"(profile '{profile_name}'). Waiting for next cycle.")
-            self.update_log(msg, profile_name=profile_name)
+            error_msg = f"Target path is not available: '{backup_dir}'"
+            error_type = "disk_unavailable"
+            error_logger.log_error(profile_name, error_type, error_msg)
+            self.update_log(f"{error_msg} (profile '{profile_name}'). Waiting for next cycle.",
+                            profile_name=profile_name)
+            try:
+                error_notifier.send_pre_backup_alert(profile_name, error_type, error_msg)
+            except Exception as e:
+                self.update_log(f"Failed to send pre-backup alert: {e}", profile_name=profile_name)
             if show_dialog:
-                messagebox.showwarning("Backup Skipped", msg)
+                messagebox.showwarning("Backup Skipped", f"{error_msg} (profile '{profile_name}').")
             return
         free_bytes = self._get_free_space(backup_dir)
         if free_bytes is not None and free_bytes < MIN_FREE_BYTES:
             free_gb = free_bytes / (1024 ** 3)
+            error_msg = f"Low disk space on target: {free_gb:.2f} GB free"
+            error_type = "low_disk_space"
+            error_logger.log_error(profile_name, error_type, error_msg)
             if show_dialog:
                 if not messagebox.askyesno("Low Disk Space",
                                            f"Only {free_gb:.2f} GB free on target disk.\nContinue backup?"):
+                    try:
+                        error_notifier.send_pre_backup_alert(profile_name, error_type, error_msg)
+                    except Exception as e:
+                        self.update_log(f"Failed to send pre-backup alert: {e}", profile_name=profile_name)
                     return
             else:
-                self.update_log(f"Low disk space on target: {free_gb:.2f} GB free. Skipping.",
-                                profile_name=profile_name)
+                self.update_log(f"{error_msg}. Skipping.", profile_name=profile_name)
+                try:
+                    error_notifier.send_pre_backup_alert(profile_name, error_type, error_msg)
+                except Exception as e:
+                    self.update_log(f"Failed to send pre-backup alert: {e}", profile_name=profile_name)
                 return
         self.save_config()
         state["stop_flag"] = False
@@ -1167,12 +1271,20 @@ class BackupApp:
         restore_after = pc_config.get("restore_after", "only_if_was_running")
         total_timeout_minutes = profile.get("total_timeout_minutes", 0)
 
-        closed_processes = {}
+        # Сбор ошибок сеанса для отправки алерта
+        session_errors = []
+        # Флаги для определения outcome
+        outcome = None  # "total_failure" | "success_after_retry" | "timeout" | None
+        successful_attempt = None
+        session_start_time = time.time()
+        timeout_elapsed_minutes = None
 
+        closed_processes = {}
         for attempt in range(1, max_attempts + 1):
             if state.get("stop_flag", False):
                 self.update_log(f"[{profile_name}] Backup stopped by user.",
                                 profile_name=profile_name)
+                # При stop by user алерт НЕ отправляем
                 break
             self.update_log(f"[{profile_name}] === Attempt {attempt}/{max_attempts} ===",
                             profile_name=profile_name)
@@ -1198,6 +1310,7 @@ class BackupApp:
                             error_msg = f"Failed to close process '{proc_name}'"
                             error_type = "process_close_failed"
                             error_logger.log_error(profile_name, error_type, error_msg, attempt, max_attempts)
+                            # При process_close_failed с abort алерт НЕ отправляем
                             self.update_log(f"[{profile_name}] Aborting due to process close failure.",
                                             profile_name=profile_name)
                             if attempt == max_attempts or not retry_enabled:
@@ -1214,7 +1327,6 @@ class BackupApp:
             all_copied_files = []
             all_error_details = []
             timeout_exceeded = False
-
             try:
                 for source_dir in source_dirs:
                     if state.get("stop_flag", False):
@@ -1239,6 +1351,7 @@ class BackupApp:
                         room = MAX_COPIED_LIST - len(all_copied_files)
                         all_copied_files.extend(new_files[:room])
                     total_stats["total_copied_count"] = total_stats.get("total_copied_count", 0) + len(new_files)
+
                     if total_timeout_minutes > 0:
                         elapsed_minutes = (time.time() - start_time) / 60
                         if elapsed_minutes >= total_timeout_minutes:
@@ -1259,6 +1372,7 @@ class BackupApp:
                                     profile_name=profile_name)
                     self._restore_processes(profile_name, closed_processes, restore_after)
                     self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
+                    # При stop by user алерт НЕ отправляем
                     return
 
                 if error_types:
@@ -1267,6 +1381,14 @@ class BackupApp:
                         profile_name, error_types[0], error_msg,
                         attempt, max_attempts, details=all_error_details or None,
                     )
+                    # Сохраняем ошибку в session_errors
+                    session_errors.append({
+                        "error_type": error_types[0],
+                        "error_message": error_msg,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "details": list(all_error_details) if all_error_details else [],
+                    })
                     self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}",
                                     profile_name=profile_name)
                     should_retry = retry_enabled and any(et in retry_on for et in error_types)
@@ -1280,6 +1402,7 @@ class BackupApp:
                         continue
                     else:
                         if attempt == max_attempts:
+                            outcome = "total_failure"
                             self._execute_failure_actions(profile_name, on_total_failure)
                 else:
                     msg = (f"[{profile_name}] Total files copied: {total_stats['files_copied']}\n"
@@ -1300,6 +1423,16 @@ class BackupApp:
                     else:
                         self.update_log(f"\n=== [{profile_name}] Copied files: none (all files are up to date) ===\n",
                                         profile_name=profile_name)
+                    # Успешное завершение
+                    if session_errors:
+                        outcome = "success_after_retry"
+                        successful_attempt = attempt
+                    break
+
+                # Если был timeout — прерываем цикл attempts
+                if timeout_exceeded:
+                    outcome = "timeout"
+                    timeout_elapsed_minutes = (time.time() - session_start_time) / 60
                     break
 
             except Exception as e:
@@ -1309,6 +1442,13 @@ class BackupApp:
                     profile_name, error_type, error_msg,
                     attempt, max_attempts, details=all_error_details or None,
                 )
+                session_errors.append({
+                    "error_type": error_type,
+                    "error_message": error_msg,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "details": list(all_error_details) if all_error_details else [],
+                })
                 self.update_log(f"[{profile_name}] Attempt {attempt}/{max_attempts} failed: {error_msg}",
                                 profile_name=profile_name)
                 should_retry = retry_enabled and error_type in retry_on
@@ -1320,8 +1460,25 @@ class BackupApp:
                             break
                         time.sleep(1)
                     continue
+                else:
+                    outcome = "total_failure"
 
         self._restore_processes(profile_name, closed_processes, restore_after)
+
+        # Отправка агрегированного алерта по итогам сеанса
+        if session_errors and outcome and not state.get("stop_flag", False):
+            try:
+                error_notifier.send_session_alert(
+                    profile_name=profile_name,
+                    session_errors=session_errors,
+                    outcome=outcome,
+                    successful_attempt=successful_attempt,
+                    total_timeout_minutes=total_timeout_minutes if outcome == "timeout" else None,
+                    elapsed_minutes=timeout_elapsed_minutes if outcome == "timeout" else None,
+                )
+            except Exception as e:
+                self.update_log(f"Failed to send session alert: {e}", profile_name=profile_name)
+
         self.root.after(0, lambda pn=profile_name: self._set_profile_running(pn, False))
 
     def _classify_backup_errors(self, total_stats, timeout_exceeded, stop_flag, 
