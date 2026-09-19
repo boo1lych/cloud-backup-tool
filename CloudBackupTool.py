@@ -814,9 +814,20 @@ class BackupApp:
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Action Settings")
-        dialog.geometry("400x250")
+        
+        # Центрирование относительно главного окна
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        x = main_x + (main_width - 400) // 2
+        y = main_y + (main_height - 250) // 2
+        dialog.geometry(f"400x250+{x}+{y}")
+        
+        dialog.minsize(400, 250)
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.attributes('-toolwindow', True)
 
         ttk.Label(dialog, text="Action type:").pack(anchor=tk.W, padx=10, pady=(10, 0))
         action_type_var = tk.StringVar(value=existing.get("action", "run_script"))
@@ -871,8 +882,8 @@ class BackupApp:
             self.save_current_profile_settings()
             dialog.destroy()
 
-        ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT, padx=(0, 5))
+        ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
 
     def _browse_script(self, string_var):
         path = filedialog.askopenfilename(filetypes=[("Scripts", "*.bat *.ps1 *.exe"), ("All files", "*.*")])
@@ -950,9 +961,20 @@ class BackupApp:
     def open_vk_teams_alerts_settings(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("VK Teams Alerts")
-        dialog.geometry("520x420")
+        
+        # Центрирование относительно главного окна
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        x = main_x + (main_width - 520) // 2
+        y = main_y + (main_height - 420) // 2
+        dialog.geometry(f"520x420+{x}+{y}")
+        
+        dialog.minsize(520, 420)
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.attributes('-toolwindow', True)
 
         cfg = error_notifier.load_config()
 
@@ -1029,8 +1051,8 @@ class BackupApp:
             error_notifier.save_config(new_cfg)
             dialog.destroy()
 
-        ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=10).pack(side=tk.RIGHT, padx=(0, 5))
+        ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
 
     def open_about(self):
         messagebox.showinfo("About", "Cloud Backup Tool\nVersion 3.0.0\n\nBackup utility for cloud storage")
@@ -1571,8 +1593,19 @@ class BackupApp:
                 return
         window = tk.Toplevel(self.root)
         window.title(f"Backup Failed - {profile_name}")
-        window.geometry("500x300")
+        
+        # Центрирование относительно главного окна
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        x = main_x + (main_width - 500) // 2
+        y = main_y + (main_height - 300) // 2
+        window.geometry(f"500x300+{x}+{y}")
+        
+        window.minsize(500, 300)
         window.transient(self.root)
+        window.attributes('-toolwindow', True)
         text = scrolledtext.ScrolledText(window, wrap=tk.WORD, font=("Arial", 10))
         text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         text.insert(tk.END, message)
@@ -1841,7 +1874,7 @@ class BackupApp:
     # =========================================================
     def create_tray_menu(self):
         return pystray.Menu(
-            pystray.MenuItem("Open Window", self.show_window),
+            pystray.MenuItem("Open Window", self.show_window, default=True),
             pystray.MenuItem("Minimize to Tray", self.hide_window),
             pystray.MenuItem("Run at Windows startup", self.toggle_autorun_from_tray,
                              checked=lambda item: self.check_autorun()),
@@ -1875,7 +1908,13 @@ class BackupApp:
         self.root.withdraw()
 
     def show_window(self, *args):
-        self.root.after(0, self.root.deiconify)
+        self.root.after(0, self._restore_window)
+
+    def _restore_window(self):
+        self.root.deiconify()
+        self.root.state('normal')
+        self.root.lift()
+        self.root.focus_force()
 
     def exit_app(self, *args):
         if hasattr(self, "sched_stop"):
@@ -1922,8 +1961,16 @@ class BackupApp:
             return
         window = tk.Toplevel(self.root)
         window.title("Error Summary")
-        window.geometry("700x500")
+        
+        # Правый верхний угол экрана с отступом 50px
+        screen_width = window.winfo_screenwidth()
+        x = screen_width - 700 - 50
+        y = 50
+        window.geometry(f"700x500+{x}+{y}")
+        
+        window.minsize(700, 500)
         window.transient(self.root)
+        window.attributes('-toolwindow', True)
         text = scrolledtext.ScrolledText(window, wrap=tk.WORD, font=("Consolas", 9))
         text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         errors = error_logger.get_last_n_errors(50)
