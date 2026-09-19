@@ -4,3 +4,4 @@ Pillow
 pyinstaller
 sv_ttk
 psutil
+requests
