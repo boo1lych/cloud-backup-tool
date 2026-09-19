@@ -820,11 +820,11 @@ class BackupApp:
         main_y = self.root.winfo_y()
         main_width = self.root.winfo_width()
         main_height = self.root.winfo_height()
-        x = main_x + (main_width - 400) // 2
+        x = main_x + (main_width - 600) // 2
         y = main_y + (main_height - 250) // 2
-        dialog.geometry(f"400x250+{x}+{y}")
+        dialog.geometry(f"600x250+{x}+{y}")
         
-        dialog.minsize(400, 250)
+        dialog.minsize(600, 250)
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.attributes('-toolwindow', True)
@@ -839,7 +839,7 @@ class BackupApp:
         frame_script.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(frame_script, text="Script path:").grid(row=0, column=0, sticky=tk.W, pady=2)
         script_path_var = tk.StringVar(value=existing.get("script_path", ""))
-        ttk.Entry(frame_script, textvariable=script_path_var, width=30).grid(row=0, column=1, padx=5, pady=2)
+        ttk.Entry(frame_script, textvariable=script_path_var, width=60).grid(row=0, column=1, padx=5, pady=2)
         ttk.Button(frame_script, text="Browse...",
                    command=lambda: self._browse_script(script_path_var)).grid(row=0, column=2, pady=2)
         log_output_var = tk.BooleanVar(value=existing.get("log_output", True))
