@@ -1,10 +1,36 @@
 """Модуль для управления процессами (закрытие/запуск).
 Использует psutil для работы с процессами Windows.
 """
+import os
+import sys
+import logging
 import subprocess
 import psutil
 import ctypes
 from typing import Optional, Tuple, Dict, Any
+from logging.handlers import RotatingFileHandler
+
+# --- Логгер для process_manager ---
+if getattr(sys, 'frozen', False):
+    _PM_BASE_DIR = os.path.dirname(sys.executable)
+else:
+    _PM_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_PM_LOG_DIR = os.path.join(_PM_BASE_DIR, "logs")
+os.makedirs(_PM_LOG_DIR, exist_ok=True)
+
+_pm_logger = logging.getLogger("process_manager")
+_pm_logger.setLevel(logging.ERROR)
+_pm_logger.propagate = False
+_pm_logger.handlers.clear()
+_pm_handler = RotatingFileHandler(
+    os.path.join(_PM_LOG_DIR, "process_manager.log"),
+    maxBytes=1 * 1024 * 1024,  # 1 MB
+    backupCount=5,
+    encoding="utf-8",
+)
+_pm_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+_pm_logger.addHandler(_pm_handler)
 
 class ProcessNotFoundError(Exception):
     """Исключение, когда процесс не найден."""
@@ -32,7 +58,7 @@ def find_process_by_name(process_name: str) -> Optional[Dict[str, Any]]:
                 continue
         return None
     except Exception as e:
-        print(f"Error searching for process '{process_name}': {e}")
+        _pm_logger.error(f"Error searching for process '{process_name}': {e}")
         return None
 
 def _send_wm_close(pid: int) -> bool:
@@ -53,7 +79,7 @@ def _send_wm_close(pid: int) -> bool:
         user32.EnumWindows(callback, 0)
         return True
     except Exception as e:
-        print(f"Failed to send WM_CLOSE to PID {pid}: {e}")
+        _pm_logger.error(f"Failed to send WM_CLOSE to PID {pid}: {e}")
         return False
 
 def close_process(process_name: str, mode: str = 'graceful_then_force',
@@ -118,10 +144,10 @@ def close_process(process_name: str, mode: str = 'graceful_then_force',
         # Процесс уже завершён — считаем успехом
         return True, exe_path
     except psutil.AccessDenied as e:
-        print(f"Access denied when closing process '{process_name}': {e}")
+        _pm_logger.error(f"Access denied when closing process '{process_name}': {e}")
         return False, None
     except Exception as e:
-        print(f"Error closing process '{process_name}': {e}")
+        _pm_logger.error(f"Error closing process '{process_name}': {e}")
         return False, None
 
 def start_process(exe_path: str, args: list = None) -> bool:
@@ -141,11 +167,11 @@ def start_process(exe_path: str, args: list = None) -> bool:
         subprocess.Popen(cmd, shell=False)
         return True
     except FileNotFoundError:
-        print(f"Executable not found: {exe_path}")
+        _pm_logger.error(f"Executable not found: {exe_path}")
         return False
     except PermissionError:
-        print(f"Permission denied: {exe_path}")
+        _pm_logger.error(f"Permission denied: {exe_path}")
         return False
     except Exception as e:
-        print(f"Error starting process '{exe_path}': {e}")
+        _pm_logger.error(f"Error starting process '{exe_path}': {e}")
         return False
