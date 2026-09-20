@@ -1,6 +1,7 @@
 .scheduler.lock
 
 # === Конфигурация с секретами ===
+error_notifications.json
 config.json
 config_win.json
 # Рекомендуется хранить в репозитории только шаблон:
