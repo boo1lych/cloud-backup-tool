@@ -65,7 +65,7 @@ class ProfileLogger:
             handler = RotatingFileHandler(
                 log_file,
                 maxBytes=5 * 1024 * 1024,   # 5 MB
-                backupCount=3,
+                backupCount=5,
                 encoding="utf-8",
             )
             formatter = logging.Formatter(
