@@ -8,6 +8,14 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from urllib.parse import quote
 
+
+# Подавление предупреждений InsecureRequestWarning для запросов с verify=False
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except ImportError:
+    pass
+
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -29,7 +37,7 @@ _notifier_logger.handlers.clear()
 _handler = RotatingFileHandler(
     LOG_FILE,
     maxBytes=2 * 1024 * 1024,
-    backupCount=3,
+    backupCount=5,
     encoding="utf-8",
 )
 _handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
