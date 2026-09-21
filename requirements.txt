@@ -5,3 +5,4 @@ pyinstaller
 sv_ttk
 psutil
 requests
+watchdog

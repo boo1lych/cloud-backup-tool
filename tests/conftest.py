@@ -1,7 +1,16 @@
 import pytest
 import os
+import sys
 import tempfile
 import shutil
+
+# Add project root to sys.path so tests can import modules like backup_logic
+# Поднимаемся на уровень выше — из tests/ в корень проекта
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 
 @pytest.fixture

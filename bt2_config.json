@@ -15,7 +15,7 @@
    ],
    "backup_dir": "O:/",
    "skip_links": true,
-   "backup_schedule": "Custom",
+   "backup_schedule": "On file change",
    "custom_time": "1",
    "exclude_patterns": "~, *.tmp",
    "auto_start_backup": true,
@@ -44,7 +44,16 @@
     ],
     "on_total_failure": []
    },
-   "total_timeout_minutes": 0
+   "total_timeout_minutes": 0,
+   "event_filters": [
+    "created",
+    "modified",
+    "deleted",
+    "moved"
+   ],
+   "on_queue_overflow": "run_immediately",
+   "event_debounce_seconds": 5,
+   "previous_schedule": "Weekly"
   },
   "Outlook": {
    "source_dirs": [
@@ -80,7 +89,55 @@
     ],
     "on_total_failure": []
    },
-   "total_timeout_minutes": 0
+   "total_timeout_minutes": 0,
+   "event_filters": [
+    "created",
+    "modified",
+    "deleted",
+    "moved"
+   ],
+   "on_queue_overflow": "run_immediately",
+   "event_debounce_seconds": 5,
+   "previous_schedule": "Daily 23:00"
+  },
+  "Test": {
+   "source_dirs": [],
+   "backup_dir": "",
+   "skip_links": true,
+   "backup_schedule": "None",
+   "custom_time": "",
+   "exclude_patterns": "",
+   "enabled": false,
+   "auto_start_backup": false,
+   "weekly_days": [
+    "Monday"
+   ],
+   "weekly_time": "23:00",
+   "process_control": {
+    "enabled": false,
+    "close_before": [],
+    "close_mode": "graceful_then_force",
+    "graceful_timeout_sec": 10,
+    "on_close_failure": "abort",
+    "restore_after": "only_if_was_running"
+   },
+   "retry": {
+    "enabled": false,
+    "max_attempts": 3,
+    "interval_seconds": 300,
+    "retry_on": [],
+    "on_total_failure": []
+   },
+   "total_timeout_minutes": 0,
+   "event_filters": [
+    "created",
+    "modified",
+    "deleted",
+    "moved"
+   ],
+   "on_queue_overflow": "run_immediately",
+   "event_debounce_seconds": 5,
+   "previous_schedule": "None"
   }
  }
 }

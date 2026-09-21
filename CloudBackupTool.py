@@ -16,12 +16,13 @@ import atexit
 import queue
 import copy
 from backup_logic import (
-    validate_custom_time, validate_hhmm, backup_saves, is_reparse_point,
-    validate_profile_name,
+    validate_custom_time, validate_hhmm, backup_saves, backup_changed_files,
+    is_reparse_point, validate_profile_name,
 )
 from error_log import error_logger
 from profile_logger import ProfileLogger
 import error_notifier
+from event_monitor import EventMonitor
 
 MAX_COPIED_LIST = 10000
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -125,6 +126,7 @@ class BackupApp:
 
         # Состояние каждого профиля
         self.profile_state = {}
+        self.event_monitors = {}
         self.load_config()
         self._apply_theme(self.settings["global"].get("theme", "light"))
         for pname in self.settings["profiles"]:
@@ -156,7 +158,19 @@ class BackupApp:
 
     def _auto_start_on_launch(self):
         for pname, profile in self.settings["profiles"].items():
-            if profile.get("enabled", False) and profile.get("auto_start_backup", False):
+            if not profile.get("enabled", False):
+                continue
+            
+            # Event-driven профили всегда запускаются при старте
+            if profile.get("backup_schedule") == "On file change":
+                self.update_log(
+                    f"Initial backup for Event-driven profile '{pname}' (changes during downtime)",
+                    profile_name=pname
+                )
+                self.start_profile_backup(pname, show_dialog=False)
+                # Запускаем мониторинг
+                self._start_event_monitor(pname)
+            elif profile.get("auto_start_backup", False):
                 self.start_profile_backup(pname, show_dialog=False)
 
     # =========================================================
@@ -291,7 +305,9 @@ class BackupApp:
                                          command=self.stop_current_profile_backup, width=12, state=tk.DISABLED)
         widgets["stop_btn"].pack(side=tk.LEFT, padx=(0, 20))
         widgets["status_label"] = ttk.Label(ctrl_inner, text="Idle", foreground="gray")
-        widgets["status_label"].pack(side=tk.LEFT)
+        widgets["status_label"].pack(side=tk.LEFT, padx=(0, 20))
+        widgets["monitoring_indicator"] = ttk.Label(ctrl_inner, text="Monitoring: OFF", foreground="gray")
+        widgets["monitoring_indicator"].pack(side=tk.LEFT)
 
         # Source Directories
         source_frame = ttk.LabelFrame(self.main_tab, text="Source Directories", padding=10)
@@ -333,7 +349,7 @@ class BackupApp:
         ttk.Label(right_col, text="Backup Schedule:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
         widgets["schedule_var"] = tk.StringVar(value="None")
         widgets["schedule_menu"] = ttk.Combobox(right_col, textvariable=widgets["schedule_var"],
-                                                values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly"],
+                                                values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly", "On file change"],
                                                 state="readonly", width=15)
         widgets["schedule_menu"].grid(row=0, column=1, padx=(0, 10))
         widgets["schedule_menu"].bind("<<ComboboxSelected>>", self.schedule_changed)
@@ -362,11 +378,43 @@ class BackupApp:
             ttk.Checkbutton(widgets["weekly_days_frame"], text=day[:3], variable=var,
                             command=self.on_weekly_settings_changed).pack(side=tk.LEFT, padx=(0, 5))
 
-        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=3, column=0, sticky=tk.W, pady=(10, 0))
+        # Event-driven settings (показываются только при выборе "On file change")
+        widgets["event_frame"] = ttk.LabelFrame(right_col, text="Event-driven Settings", padding=5)
+        widgets["event_frame"].grid(row=3, column=0, columnspan=3, sticky=tk.EW, pady=(10, 0))
+
+        # Event filters
+        widgets["event_created_var"] = tk.BooleanVar(value=True)
+        widgets["event_modified_var"] = tk.BooleanVar(value=True)
+        widgets["event_deleted_var"] = tk.BooleanVar(value=True)
+        widgets["event_moved_var"] = tk.BooleanVar(value=True)
+
+        ttk.Checkbutton(widgets["event_frame"], text="Create/Modify files",
+                        variable=widgets["event_created_var"],
+                        command=self.on_event_settings_changed).grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        ttk.Checkbutton(widgets["event_frame"], text="Delete files",
+                        variable=widgets["event_deleted_var"],
+                        command=self.on_event_settings_changed).grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+        ttk.Checkbutton(widgets["event_frame"], text="Rename files",
+                        variable=widgets["event_moved_var"],
+                        command=self.on_event_settings_changed).grid(row=0, column=2, sticky=tk.W)
+
+        # On queue overflow
+        ttk.Label(widgets["event_frame"], text="On queue overflow:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        widgets["on_overflow_var"] = tk.StringVar(value="run_immediately")
+        widgets["on_overflow_menu"] = ttk.Combobox(widgets["event_frame"],
+                                                textvariable=widgets["on_overflow_var"],
+                                                values=["run_immediately", "run_by_schedule", "log_warning"],
+                                                state="readonly", width=18)
+        widgets["on_overflow_menu"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(5, 0))
+        widgets["on_overflow_menu"].bind("<<ComboboxSelected>>", self.on_event_settings_changed)
+
+        widgets["event_frame"].grid_remove()  # Скрыто по умолчанию
+
+        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=4, column=0, sticky=tk.W, pady=(10, 0))
         widgets["exclude_entry"] = ttk.Entry(right_col, width=40)
-        widgets["exclude_entry"].grid(row=3, column=1, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        widgets["exclude_entry"].grid(row=4, column=1, columnspan=2, sticky=tk.EW, pady=(10, 0))
         widgets["exclude_hint_label"] = tk.Label(right_col, text="Masks: *$*.txt, ~$, *.tmp, logs/*", fg="gray")
-        widgets["exclude_hint_label"].grid(row=4, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
+        widgets["exclude_hint_label"].grid(row=5, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
 
         widgets["custom_time_entry"].grid_remove()
         widgets["custom_hint_label"].grid_remove()
@@ -473,6 +521,12 @@ class BackupApp:
         self.current_profile_name = profile_name
         profile_data = self.settings["profiles"][profile_name]
         w = self.profile_widgets
+        
+        # Запускаем мониторинг для Event-driven профилей
+        if profile_data.get("backup_schedule") == "On file change" and profile_data.get("enabled", False):
+            self._start_event_monitor(profile_name)
+        else:
+            self._stop_event_monitor(profile_name)
 
         # Main tab
         w["enabled_var"].set(profile_data.get("enabled", False))
@@ -520,9 +574,18 @@ class BackupApp:
         # Total Timeout
         w["total_timeout_minutes_var"].set(str(profile_data.get("total_timeout_minutes", 0)))
 
+        # Event-driven settings
+        event_filters = profile_data.get("event_filters", ["created", "modified", "deleted", "moved"])
+        w["event_created_var"].set("created" in event_filters and "modified" in event_filters)
+        w["event_modified_var"].set("modified" in event_filters)
+        w["event_deleted_var"].set("deleted" in event_filters)
+        w["event_moved_var"].set("moved" in event_filters)
+        w["on_overflow_var"].set(profile_data.get("on_queue_overflow", "run_immediately"))
+
         self.update_profile_status(profile_name)
         self._update_custom_time_hint()
         self._refresh_log_display(profile_name)
+        self._update_monitoring_indicator(profile_name)
 
     def _update_schedule_visibility(self):
         w = self.profile_widgets
@@ -532,6 +595,8 @@ class BackupApp:
         w["weekly_time_entry"].grid_remove()
         w["weekly_days_frame"].grid_remove()
         w["weekly_hint_label"].grid_remove()
+        w["event_frame"].grid_remove()
+        
         if value == "Custom":
             w["custom_time_entry"].grid()
             w["custom_hint_label"].grid()
@@ -539,6 +604,11 @@ class BackupApp:
             w["weekly_time_entry"].grid()
             w["weekly_days_frame"].grid()
             w["weekly_hint_label"].grid()
+        elif value == "On file change":
+            w["event_frame"].grid()
+        
+        # Обновляем disabled состояние вкладок
+        self._update_tabs_state()
 
     # =========================================================
     # =============== PROFILE SELECTION / SAVE ================
@@ -593,6 +663,22 @@ class BackupApp:
             "on_total_failure": w.get("retry_on_total_failure_actions", [])
         }
         p["total_timeout_minutes"] = int(w["total_timeout_minutes_var"].get() or 0)
+
+        # Event-driven settings
+        event_filters = []
+        if w["event_created_var"].get():
+            event_filters.extend(["created", "modified"])
+        if w["event_deleted_var"].get():
+            event_filters.append("deleted")
+        if w["event_moved_var"].get():
+            event_filters.append("moved")
+        p["event_filters"] = event_filters
+        p["on_queue_overflow"] = w["on_overflow_var"].get()
+        p["event_debounce_seconds"] = 5  # hardcoded, not in UI
+
+        # Update previous_schedule when switching away from "On file change"
+        if p["backup_schedule"] != "On file change":
+            p["previous_schedule"] = p["backup_schedule"]
 
     # =========================================================
     # ============== PROFILE MANAGEMENT (NEW) =================
@@ -741,6 +827,13 @@ class BackupApp:
         self.update_profile_status(name)
         self.update_log(f"Profile '{name}' {'enabled' if enabled else 'disabled'}",
                         profile_name=name)
+        
+        # Управление EventMonitor
+        profile = self.settings["profiles"].get(name, {})
+        if enabled and profile.get("backup_schedule") == "On file change":
+            self._start_event_monitor(name)
+        else:
+            self._stop_event_monitor(name)
 
     def add_source(self):
         directory = filedialog.askdirectory()
@@ -749,12 +842,18 @@ class BackupApp:
             if directory not in current:
                 self.profile_widgets["source_listbox"].insert(tk.END, directory)
                 self.save_current_profile_settings()
+                name = self.get_active_profile_name()
+                if name:
+                    self._restart_event_monitor(name)
 
     def remove_source(self):
         selected = list(self.profile_widgets["source_listbox"].curselection())
         for idx in reversed(selected):
             self.profile_widgets["source_listbox"].delete(idx)
         self.save_current_profile_settings()
+        name = self.get_active_profile_name()
+        if name:
+            self._restart_event_monitor(name)
 
     def browse_backup(self):
         current = self.profile_widgets["backup_entry"].get()
@@ -900,11 +999,26 @@ class BackupApp:
         self.setup_schedule()
         self._update_custom_time_hint()
 
+    def on_event_settings_changed(self, event=None):
+        self.save_current_profile_settings()
+        name = self.get_active_profile_name()
+        if name:
+            self._restart_event_monitor(name)
+
     def schedule_changed(self, event=None):
         self._update_schedule_visibility()
         self.save_current_profile_settings()
         self.setup_schedule()
         self.update_tray_menu()
+        
+        # Управление EventMonitor
+        name = self.get_active_profile_name()
+        if name:
+            profile = self.settings["profiles"].get(name, {})
+            if profile.get("backup_schedule") == "On file change":
+                self._start_event_monitor(name)
+            else:
+                self._stop_event_monitor(name)
 
     # =========================================================
     # ============= PREFERENCES & ABOUT DIALOGS ===============
@@ -1094,10 +1208,13 @@ class BackupApp:
         if text is None:
             state = self.profile_state.get(profile_name, {})
             enabled = self.settings["profiles"].get(profile_name, {}).get("enabled", False)
+            schedule = self.settings["profiles"].get(profile_name, {}).get("backup_schedule", "None")
             if state.get("running", False):
                 text, color = "Running...", "orange"
             elif not enabled:
                 text, color = "Disabled", "gray"
+            elif schedule == "On file change":
+                text, color = "Idle (event-driven)", "green"
             else:
                 text, color = "Idle (scheduled)", "blue"
         w["status_label"].config(text=text, foreground=color)
@@ -1183,7 +1300,7 @@ class BackupApp:
         except Exception:
             return False
 
-    def start_profile_backup(self, profile_name, show_dialog=True):
+    def start_profile_backup(self, profile_name, show_dialog=True, events=None):
         state = self.profile_state.get(profile_name)
         if not state:
             return
@@ -1241,7 +1358,7 @@ class BackupApp:
         self._set_profile_running(profile_name, True)
         self.update_log(f"=== Starting backup for profile '{profile_name}' ===",
                         profile_name=profile_name)
-        t = threading.Thread(target=self.run_backup, args=(profile_name,), daemon=True)
+        t = threading.Thread(target=self.run_backup, args=(profile_name, events), daemon=True)
         state["thread"] = t
         t.start()
 
@@ -1271,13 +1388,14 @@ class BackupApp:
                 stopped += 1
         self.update_log(f"Stop All: stopped {stopped} profile(s).")
 
-    def run_backup(self, profile_name):
+    def run_backup(self, profile_name, events=None):
         state = self.profile_state.get(profile_name, {})
         profile = self.settings["profiles"].get(profile_name, {})
         source_dirs = profile.get("source_dirs", [])
         backup_dir = profile.get("backup_dir", "")
         skip_links = profile.get("skip_links", True)
         exclude_patterns_str = profile.get("exclude_patterns", "")
+        is_event_driven = events is not None
         retry_config = profile.get("retry", {})
         retry_enabled = retry_config.get("enabled", False)
         max_attempts = retry_config.get("max_attempts", 3) if retry_enabled else 1
@@ -1350,22 +1468,14 @@ class BackupApp:
             all_error_details = []
             timeout_exceeded = False
             try:
-                for source_dir in source_dirs:
-                    if state.get("stop_flag", False):
-                        break
-                    if total_timeout_minutes > 0:
-                        elapsed_minutes = (time.time() - start_time) / 60
-                        if elapsed_minutes >= total_timeout_minutes:
-                            timeout_exceeded = True
-                            self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).",
-                                            profile_name=profile_name)
-                            break
-                    stats = backup_saves(
-                        source_dir, backup_dir, skip_links, exclude_patterns_str,
-                        source_dirs, state,
+                if is_event_driven:
+                    # Event-driven режим: обрабатываем только изменённые файлы
+                    stats = backup_changed_files(
+                        source_dirs, backup_dir, skip_links, exclude_patterns_str,
+                        source_dirs, state, events,
                         log=lambda m: self.update_log(m, profile_name=profile_name),
                     )
-                    for key in total_stats:
+                    for key in ["files_copied", "files_skipped", "total_size_mb", "errors"]:
                         total_stats[key] += stats.get(key, 0)
                     all_error_details.extend(stats.get("error_details", []))
                     new_files = stats.get("copied_files", [])
@@ -1373,6 +1483,38 @@ class BackupApp:
                         room = MAX_COPIED_LIST - len(all_copied_files)
                         all_copied_files.extend(new_files[:room])
                     total_stats["total_copied_count"] = total_stats.get("total_copied_count", 0) + len(new_files)
+                    # Логируем дополнительную статистику для event-driven
+                    if stats.get("files_deleted", 0) > 0:
+                        self.update_log(f"[{profile_name}] Files deleted: {stats['files_deleted']}",
+                                        profile_name=profile_name)
+                    if stats.get("files_moved", 0) > 0:
+                        self.update_log(f"[{profile_name}] Files moved: {stats['files_moved']}",
+                                        profile_name=profile_name)
+                else:
+                    # Обычный режим: полный бэкап всех source_dirs
+                    for source_dir in source_dirs:
+                        if state.get("stop_flag", False):
+                            break
+                        if total_timeout_minutes > 0:
+                            elapsed_minutes = (time.time() - start_time) / 60
+                            if elapsed_minutes >= total_timeout_minutes:
+                                timeout_exceeded = True
+                                self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).",
+                                                profile_name=profile_name)
+                                break
+                        stats = backup_saves(
+                            source_dir, backup_dir, skip_links, exclude_patterns_str,
+                            source_dirs, state,
+                            log=lambda m: self.update_log(m, profile_name=profile_name),
+                        )
+                        for key in total_stats:
+                            total_stats[key] += stats.get(key, 0)
+                        all_error_details.extend(stats.get("error_details", []))
+                        new_files = stats.get("copied_files", [])
+                        if len(all_copied_files) < MAX_COPIED_LIST:
+                            room = MAX_COPIED_LIST - len(all_copied_files)
+                            all_copied_files.extend(new_files[:room])
+                        total_stats["total_copied_count"] = total_stats.get("total_copied_count", 0) + len(new_files)
 
                     if total_timeout_minutes > 0:
                         elapsed_minutes = (time.time() - start_time) / 60
@@ -1381,7 +1523,6 @@ class BackupApp:
                             self.update_log(f"[{profile_name}] Timeout exceeded ({total_timeout_minutes} minutes).",
                                             profile_name=profile_name)
                             break
-
                 elapsed_time = time.time() - start_time
                 speed = total_stats["total_size_mb"] / elapsed_time if elapsed_time > 0 else 0
                 error_types = self._classify_backup_errors(
@@ -1486,6 +1627,10 @@ class BackupApp:
                     outcome = "total_failure"
 
         self._restore_processes(profile_name, closed_processes, restore_after)
+
+        # Уведомляем EventMonitor о завершении бэкапа
+        if hasattr(self, 'event_monitors') and profile_name in self.event_monitors:
+            self.event_monitors[profile_name].on_backup_complete()
 
         # Отправка агрегированного алерта по итогам сеанса
         if session_errors and outcome and not state.get("stop_flag", False):
@@ -1708,6 +1853,111 @@ class BackupApp:
             else:
                 w["weekly_hint_label"].config(text=err, fg="red")
 
+    def _update_tabs_state(self):
+        """Делает вкладки Process Control и Retry Settings disabled при выборе 'On file change'."""
+        if not self.current_profile_name:
+            return
+        profile = self.settings["profiles"].get(self.current_profile_name, {})
+        is_event_driven = profile.get("backup_schedule") == "On file change"
+        
+        try:
+            if is_event_driven:
+                self.profile_notebook.tab(self.process_control_tab, state='disabled')
+                self.profile_notebook.tab(self.retry_settings_tab, state='disabled')
+            else:
+                self.profile_notebook.tab(self.process_control_tab, state='normal')
+                self.profile_notebook.tab(self.retry_settings_tab, state='normal')
+        except tk.TclError:
+            # Если state='disabled' не поддерживается, используем fallback
+            pass
+
+    def _update_monitoring_indicator(self, profile_name):
+        """Обновляет индикатор мониторинга."""
+        if profile_name != self.current_profile_name:
+            return
+        w = self.profile_widgets
+        if "monitoring_indicator" not in w:
+            return
+        
+        profile = self.settings["profiles"].get(profile_name, {})
+        is_event_driven = profile.get("backup_schedule") == "On file change"
+        is_enabled = profile.get("enabled", False)
+        is_monitoring = is_event_driven and is_enabled and profile_name in self.event_monitors
+        
+        if is_monitoring:
+            w["monitoring_indicator"].config(text="Monitoring: ON", foreground="green")
+        else:
+            w["monitoring_indicator"].config(text="Monitoring: OFF", foreground="gray")
+
+    def _start_event_monitor(self, profile_name):
+        """Запускает EventMonitor для профиля."""
+        profile = self.settings["profiles"].get(profile_name, {})
+        if not profile.get("enabled", False):
+            return
+        if profile.get("backup_schedule") != "On file change":
+            return
+        
+        source_dirs = profile.get("source_dirs", [])
+        if not source_dirs:
+            return
+        
+        # Останавливаем предыдущий монитор, если был
+        self._stop_event_monitor(profile_name)
+        
+        event_filters = profile.get("event_filters", ["created", "modified", "deleted", "moved"])
+        on_overflow = profile.get("on_queue_overflow", "run_immediately")
+        debounce_seconds = profile.get("event_debounce_seconds", 5)
+        
+        def backup_callback(pname, events=None, overflow=False):
+            """Callback для запуска бэкапа из EventMonitor."""
+            self.root.after(0, lambda: self._event_triggered_backup(pname, events, overflow))
+        
+        def log_callback(message):
+            """Callback для логирования из EventMonitor."""
+            self.update_log(message, profile_name=profile_name)
+        
+        monitor = EventMonitor(profile_name, backup_callback, log_callback)
+        monitor.start(source_dirs, event_filters, on_overflow, debounce_seconds)
+        self.event_monitors[profile_name] = monitor
+        
+        self._update_monitoring_indicator(profile_name)
+
+    def _stop_event_monitor(self, profile_name):
+        """Останавливает EventMonitor для профиля."""
+        if profile_name in self.event_monitors:
+            try:
+                self.event_monitors[profile_name].stop()
+            except Exception:
+                pass
+            del self.event_monitors[profile_name]
+        
+        self._update_monitoring_indicator(profile_name)
+
+    def _restart_event_monitor(self, profile_name):
+        """Перезапускает EventMonitor (при изменении source_dirs или фильтров)."""
+        profile = self.settings["profiles"].get(profile_name, {})
+        if profile.get("backup_schedule") == "On file change" and profile.get("enabled", False):
+            self._start_event_monitor(profile_name)
+
+    def _event_triggered_backup(self, profile_name, events=None, overflow=False):
+        """Запускает бэкап, триггернутый событием файловой системы."""
+        profile = self.settings["profiles"].get(profile_name, {})
+        # Если overflow=True и on_queue_overflow == "run_by_schedule"
+        if overflow and profile.get("on_queue_overflow") == "run_by_schedule":
+            previous_schedule = profile.get("previous_schedule", "None")
+            self.update_log(
+                f"[{profile_name}] Queue overflow — will run by previous schedule: {previous_schedule}",
+                profile_name=profile_name
+            )
+            return
+        self.update_log(
+            f"[{profile_name}] Backup triggered by file change",
+            profile_name=profile_name
+        )
+        # Передаём events в start_profile_backup
+        self.start_profile_backup(profile_name, show_dialog=False, events=events)
+
+
     def _register_schedule(self, profile_name, profile):
         sched = profile.get("backup_schedule", "None")
         if sched.startswith("Daily"):
@@ -1865,6 +2115,11 @@ class BackupApp:
                     }
                 if "total_timeout_minutes" not in pdata:
                     pdata["total_timeout_minutes"] = 0
+                # Event-driven monitoring fields
+                pdata.setdefault("event_filters", ["created", "modified", "deleted", "moved"])
+                pdata.setdefault("on_queue_overflow", "run_immediately")
+                pdata.setdefault("event_debounce_seconds", 5)
+                pdata.setdefault("previous_schedule", "None")
 
         if "errors_last_read_pos" not in self.settings["global"]:
             self.settings["global"]["errors_last_read_pos"] = 0
@@ -1923,6 +2178,16 @@ class BackupApp:
 
     def _shutdown(self):
         log_exit_or_crash("Normal shutdown initiated by user (exit_app called)")
+        
+        # Останавливаем все EventMonitors
+        if hasattr(self, "event_monitors"):
+            for monitor in self.event_monitors.values():
+                try:
+                    monitor.stop()
+                except Exception:
+                    pass
+            self.event_monitors.clear()
+        
         if hasattr(self, "profile_logger"):
             try:
                 self.profile_logger.close_all()
