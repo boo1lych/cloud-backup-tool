@@ -102,7 +102,7 @@ class EventMonitor:
         self.debounce_seconds: float = 5.0
 
         # Watchdog
-        self.observer = None  # type: Optional[Observer]
+        self.observer = None  
 
         # Event buffer (debounce)
         self._event_buffer: Dict[str, str] = {}  # path -> last_event_type
