@@ -265,20 +265,66 @@ class TestOverflowHandling:
 
 
 class TestLogCallback:
-    def test_log_callback_called_on_event(self):
+    def test_log_callback_called_on_fire_backup(self, tmp_path):
+        """Логирование происходит при вызове _fire_backup, а не сразу."""
         log_cb = Mock()
         monitor = _make_monitor(log_callback=log_cb)
-        monitor._on_fs_event(MockEvent("created", "/src/file.txt"))
+        f = tmp_path / "file.txt"
+        f.write_text("data")
+        monitor._on_fs_event(MockEvent("created", str(f)))
         _cancel_timer(monitor)
+        # Логи ещё нет
+        assert not log_cb.called
+        # Вызываем _fire_backup
+        monitor._fire_backup()
+        # Теперь лог есть
         assert log_cb.called
         msg = log_cb.call_args[0][0]
         assert "created" in msg
         assert "file.txt" in msg
 
-    def test_log_callback_includes_dir_marker(self):
+    def test_log_callback_excludes_dir_events(self):
+        """События директорий не логируются."""
         log_cb = Mock()
         monitor = _make_monitor(log_callback=log_cb)
         monitor._on_fs_event(MockEvent("created", "/src/dir", is_directory=True))
         _cancel_timer(monitor)
+        monitor._fire_backup()
+        # Логи для директорий не выводятся
+        assert not log_cb.called
+
+    def test_log_aggregates_multiple_events(self, tmp_path):
+        """Агрегирует несколько событий одного файла в одну строку."""
+        log_cb = Mock()
+        monitor = _make_monitor(log_callback=log_cb)
+        f = tmp_path / "file.txt"
+        f.write_text("data")
+        monitor._on_fs_event(MockEvent("created", str(f)))
+        monitor._on_fs_event(MockEvent("modified", str(f)))
+        monitor._on_fs_event(MockEvent("modified", str(f)))
+        _cancel_timer(monitor)
+        monitor._fire_backup()
+        # Должна быть одна строка с агрегированными событиями
+        assert log_cb.call_count == 1
         msg = log_cb.call_args[0][0]
-        assert "dir" in msg
+        assert "created+modified" in msg
+        assert "file.txt" in msg
+
+    def test_log_excludes_by_pattern(self, tmp_path):
+        """Фильтрует события по exclude patterns."""
+        log_cb = Mock()
+        monitor = _make_monitor(log_callback=log_cb)
+        monitor.exclude_patterns = ["~$*", "*.tmp"]
+        f1 = tmp_path / "~$temp.xlsx"
+        f1.write_text("data")
+        f2 = tmp_path / "normal.txt"
+        f2.write_text("data")
+        monitor._on_fs_event(MockEvent("created", str(f1)))
+        monitor._on_fs_event(MockEvent("created", str(f2)))
+        _cancel_timer(monitor)
+        monitor._fire_backup()
+        # Только одно событие (для normal.txt)
+        assert log_cb.call_count == 1
+        msg = log_cb.call_args[0][0]
+        assert "normal.txt" in msg
+        assert "~$temp.xlsx" not in msg

@@ -7,6 +7,7 @@ import sys
 import time
 import threading
 from typing import List, Dict, Callable, Optional, Set, Tuple
+import fnmatch
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -100,6 +101,7 @@ class EventMonitor:
         self.event_filters: List[str] = []
         self.on_overflow: str = "run_immediately"
         self.debounce_seconds: float = 5.0
+        self.exclude_patterns: List[str] = []
 
         # Watchdog
         self.observer = None  
@@ -110,6 +112,10 @@ class EventMonitor:
         self._dir_event_buffer: Dict[str, str] = {}  # dir_path -> last_event_type
         self._dir_moved_buffer: List[Tuple[str, str]] = []  # (src, dest)
         self._buffer_lock = threading.Lock()
+        
+        # Log aggregation buffer
+        self._log_buffer: Dict[str, Set[str]] = {}  # path -> set of event types
+        self._log_moved_buffer: List[Tuple[str, str]] = []  # (src, dest)
 
         # Debounce
         self._debounce_timer: Optional[threading.Timer] = None
@@ -136,14 +142,14 @@ class EventMonitor:
     # ── Public API ──────────────────────────────────────────────────────
 
     def start(self, source_dirs: List[str], event_filters: List[str],
-              on_overflow: str, debounce_seconds: float):
+            on_overflow: str, debounce_seconds: float, exclude_patterns: List[str] = None):
         """Start monitoring. Stops any previous monitoring first."""
         self.stop()
-
         self.source_dirs = list(source_dirs)
         self.event_filters = list(event_filters)
         self.on_overflow = on_overflow
         self.debounce_seconds = debounce_seconds
+        self.exclude_patterns = list(exclude_patterns) if exclude_patterns else []
         self._running = True
         self._overflow_stop_flag = False
         self._avail_stop_flag = False
@@ -212,9 +218,9 @@ class EventMonitor:
         self.log_callback(f"[{self.profile_name}] Monitoring stopped")
 
     def restart(self, source_dirs: List[str], event_filters: List[str],
-                on_overflow: str, debounce_seconds: float):
+                on_overflow: str, debounce_seconds: float, exclude_patterns: List[str] = None):
         """Restart monitoring with new parameters."""
-        self.start(source_dirs, event_filters, on_overflow, debounce_seconds)
+        self.start(source_dirs, event_filters, on_overflow, debounce_seconds, exclude_patterns)
 
     def on_backup_complete(self):
         """Must be called by BackupApp after backup finishes (success or fail)."""
@@ -261,6 +267,16 @@ class EventMonitor:
             except Exception:
                 pass
         self._create_observer()
+        
+    def _is_excluded(self, path: str) -> bool:
+        """Проверяет, попадает ли путь под exclude patterns."""
+        if not self.exclude_patterns:
+            return False
+        filename = os.path.basename(path)
+        for pattern in self.exclude_patterns:
+            if fnmatch.fnmatch(filename, pattern) or fnmatch.fnmatch(path, pattern):
+                return True
+        return False
 
     # ── File system event handling ──────────────────────────────────────
 
@@ -268,17 +284,13 @@ class EventMonitor:
         event_type = event.event_type  # "created"|"modified"|"deleted"|"moved"
         if event_type not in self.event_filters:
             return
-
         is_dir = event.is_directory
         path = event.src_path
-
-        kind = "dir" if is_dir else "file"
-        log_path = path
-        if event_type == "moved" and hasattr(event, "dest_path"):
-            log_path = f"{event.src_path} -> {event.dest_path}"
-
-        self.log_callback(f"[{self.profile_name}] {event_type} ({kind}): {log_path}")
-
+        
+        # Проверяем exclude patterns
+        if self._is_excluded(path):
+            return
+        
         # Добавляем событие в буфер
         with self._buffer_lock:
             if is_dir:
@@ -286,6 +298,7 @@ class EventMonitor:
                     self._dir_moved_buffer.append((event.src_path, event.dest_path))
                 else:
                     self._dir_event_buffer[path] = event_type
+                # Не логируем события директорий
             else:
                 if event_type == "moved" and hasattr(event, "dest_path"):
                     self._moved_buffer.append((event.src_path, event.dest_path))
@@ -293,6 +306,9 @@ class EventMonitor:
                     self._event_buffer.pop(event.src_path, None)
                     # Добавляем dest как "created"
                     self._event_buffer[event.dest_path] = "created"
+                    
+                    # Добавляем в буфер для логирования
+                    self._log_moved_buffer.append((event.src_path, event.dest_path))
                 else:
                     # Дедупликация: created + modified → created
                     existing = self._event_buffer.get(path)
@@ -300,7 +316,12 @@ class EventMonitor:
                         pass  # Оставляем "created"
                     else:
                         self._event_buffer[path] = event_type
-
+                    
+                    # Добавляем в буфер для логирования
+                    if path not in self._log_buffer:
+                        self._log_buffer[path] = set()
+                    self._log_buffer[path].add(event_type)
+        
         self._reset_debounce()
 
     def _collect_events(self) -> Dict:
@@ -359,7 +380,29 @@ class EventMonitor:
 
     def _fire_backup(self):
         """Собирает события и запускает бэкап."""
+        # Собираем события для логирования
+        log_entries = []
+        with self._buffer_lock:
+            # Собираем файлы
+            for path, event_types in self._log_buffer.items():
+                types_str = "+".join(sorted(event_types))
+                log_entries.append(f"[{self.profile_name}] {types_str} (file): {path}")
+            
+            # Собираем moved
+            for src, dest in self._log_moved_buffer:
+                log_entries.append(f"[{self.profile_name}] moved (file): {src} -> {dest}")
+            
+            # Очищаем буферы логирования
+            self._log_buffer.clear()
+            self._log_moved_buffer.clear()
+        
+        # Логируем агрегированные события
+        for entry in log_entries:
+            self.log_callback(entry)
+        
+        # Собираем события для бэкапа
         events = self._collect_events()
+        
         # Проверяем, есть ли реальные события (не пустые списки)
         if any(events.values()):
             self._trigger_backup_with_events(events)

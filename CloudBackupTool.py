@@ -1983,6 +1983,18 @@ class BackupApp:
         event_filters = profile.get("event_filters", ["created", "modified", "deleted", "moved"])
         on_overflow = profile.get("on_queue_overflow", "run_immediately")
         debounce_seconds = profile.get("event_debounce_seconds", 5)
+        
+        # Парсим exclude patterns
+        exclude_patterns_str = profile.get("exclude_patterns", "")
+        exclude_patterns = [p.strip() for p in exclude_patterns_str.split(",") if p.strip()]
+        # Нормализуем паттерны
+        normalized_patterns = []
+        for p in exclude_patterns:
+            if "*" in p or "?" in p:
+                normalized_patterns.append(p)
+            else:
+                normalized_patterns.append(f"*{p}*")
+        
         def backup_callback(pname, events=None, overflow=False):
             """Callback для запуска бэкапа из EventMonitor."""
             self.root.after(0, lambda: self._event_triggered_backup(pname, events, overflow))
@@ -1990,7 +2002,7 @@ class BackupApp:
             """Callback для логирования из EventMonitor."""
             self.root.after(0, lambda: self.update_log(message, profile_name=profile_name))
         monitor = EventMonitor(profile_name, backup_callback, log_callback)
-        monitor.start(source_dirs, event_filters, on_overflow, debounce_seconds)
+        monitor.start(source_dirs, event_filters, on_overflow, debounce_seconds, normalized_patterns)
         self.event_monitors[profile_name] = monitor
         self._update_monitoring_indicator(profile_name)
 
