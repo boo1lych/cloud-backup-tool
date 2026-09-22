@@ -537,7 +537,6 @@ class BackupApp:
         profile_data = self.settings["profiles"][profile_name]
         w = self.profile_widgets
         self.current_profile_name = profile_name
-
         # Миграция: если backup_schedule == "On file change", переносим в trigger_mode
         if profile_data.get("backup_schedule") == "On file change":
             profile_data["trigger_mode"] = "file_change"
@@ -547,19 +546,11 @@ class BackupApp:
             profile_data["backup_schedule"] = prev
         elif "trigger_mode" not in profile_data:
             profile_data["trigger_mode"] = "schedule"
-
         # Устанавливаем trigger_mode
         w["trigger_mode_var"].set(profile_data.get("trigger_mode", "schedule"))
-        
         # ВАЖНО: Обновляем состояние виджетов СРАЗУ после изменения trigger_mode,
         # чтобы Entry не остались заблокированными от предыдущего профиля
         self._update_trigger_mode_state()
-        
-        # Запускаем мониторинг для Event-driven профилей
-        if profile_data.get("trigger_mode") == "file_change" and profile_data.get("enabled", False):
-            self._start_event_monitor(profile_name)
-        else:
-            self._stop_event_monitor(profile_name)
         
         # Main tab
         w["enabled_var"].set(profile_data.get("enabled", False))
