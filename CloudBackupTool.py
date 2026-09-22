@@ -140,6 +140,7 @@ class BackupApp:
         self.schedule_lock = threading.Lock()
         self.profile_widgets = {}
         self.current_profile_name = None
+        self._loading_profile = False  # Флаг: идёт загрузка профиля в виджеты
         self.log_queue = queue.Queue()
 
         self.create_widgets()
@@ -526,9 +527,16 @@ class BackupApp:
     def _load_profile_to_widgets(self, profile_name):
         if profile_name not in self.settings["profiles"]:
             return
-        self.current_profile_name = profile_name
+        self._loading_profile = True
+        try:
+            self._load_profile_to_widgets_inner(profile_name)
+        finally:
+            self._loading_profile = False
+
+    def _load_profile_to_widgets_inner(self, profile_name):
         profile_data = self.settings["profiles"][profile_name]
         w = self.profile_widgets
+        self.current_profile_name = profile_name
 
         # Миграция: если backup_schedule == "On file change", переносим в trigger_mode
         if profile_data.get("backup_schedule") == "On file change":
@@ -542,13 +550,17 @@ class BackupApp:
 
         # Устанавливаем trigger_mode
         w["trigger_mode_var"].set(profile_data.get("trigger_mode", "schedule"))
-
+        
+        # ВАЖНО: Обновляем состояние виджетов СРАЗУ после изменения trigger_mode,
+        # чтобы Entry не остались заблокированными от предыдущего профиля
+        self._update_trigger_mode_state()
+        
         # Запускаем мониторинг для Event-driven профилей
         if profile_data.get("trigger_mode") == "file_change" and profile_data.get("enabled", False):
             self._start_event_monitor(profile_name)
         else:
             self._stop_event_monitor(profile_name)
-
+        
         # Main tab
         w["enabled_var"].set(profile_data.get("enabled", False))
         w["source_listbox"].delete(0, tk.END)
@@ -707,6 +719,7 @@ class BackupApp:
         if not sel:
             return
         new_name = self.profiles_listbox.get(sel[0])
+        
         # Сохраняем предыдущий профиль
         if self.current_profile_name and self.current_profile_name != new_name:
             self.save_current_profile_settings()
@@ -722,6 +735,9 @@ class BackupApp:
 
     def _sync_profile_widgets_to_settings(self, profile_name):
         if profile_name not in self.settings["profiles"]:
+            return
+        # Не сохраняем настройки во время загрузки профиля — виджеты ещё не заполнены
+        if getattr(self, '_loading_profile', False):
             return
         w = self.profile_widgets
         p = self.settings["profiles"][profile_name]

@@ -5,7 +5,7 @@
   "log_to_file": true,
   "active_profile": "Outlook",
   "theme": "light",
-  "errors_last_read_pos": 8572,
+  "errors_last_read_pos": 1353,
   "profiles_collapsed": false
  },
  "profiles": {
@@ -17,56 +17,9 @@
    "skip_links": true,
    "backup_schedule": "Weekly",
    "custom_time": "10",
-   "exclude_patterns": "~, *.tmp",
+   "exclude_patterns": "~$, *.tmp",
    "auto_start_backup": true,
    "enabled": true,
-   "weekly_days": [
-    "Tuesday",
-    "Friday"
-   ],
-   "weekly_time": "21:00",
-   "process_control": {
-    "enabled": false,
-    "close_before": [],
-    "close_mode": "graceful_then_force",
-    "graceful_timeout_sec": 10,
-    "on_close_failure": "abort",
-    "restore_after": "only_if_was_running"
-   },
-   "retry": {
-    "enabled": false,
-    "max_attempts": 3,
-    "interval_seconds": 300,
-    "retry_on": [
-     "disk_unavailable",
-     "process_close_failed",
-     "copy_errors"
-    ],
-    "on_total_failure": []
-   },
-   "total_timeout_minutes": 0,
-   "event_filters": [
-    "created",
-    "modified",
-    "deleted",
-    "moved"
-   ],
-   "on_queue_overflow": "run_by_schedule",
-   "event_debounce_seconds": 5,
-   "previous_schedule": "Weekly",
-   "trigger_mode": "file_change"
-  },
-  "Outlook": {
-   "source_dirs": [
-    "C:/Users/aantonov/Documents/Файлы Outlook"
-   ],
-   "backup_dir": "O:/",
-   "skip_links": true,
-   "backup_schedule": "Custom",
-   "custom_time": "23:00",
-   "exclude_patterns": "~, *.tmp",
-   "enabled": false,
-   "auto_start_backup": false,
    "weekly_days": [
     "Monday"
    ],
@@ -100,34 +53,44 @@
    "on_queue_overflow": "run_immediately",
    "event_debounce_seconds": 5,
    "previous_schedule": "Custom",
-   "trigger_mode": "schedule"
+   "trigger_mode": "file_change"
   },
-  "Test": {
-   "source_dirs": [],
-   "backup_dir": "",
+  "Outlook": {
+   "source_dirs": [
+    "C:/Users/aantonov/Documents/Файлы Outlook"
+   ],
+   "backup_dir": "O:/",
    "skip_links": true,
-   "backup_schedule": "None",
-   "custom_time": "",
-   "exclude_patterns": "",
-   "enabled": false,
+   "backup_schedule": "Custom",
+   "custom_time": "23:00",
+   "exclude_patterns": "~, *.tmp",
+   "enabled": true,
    "auto_start_backup": false,
    "weekly_days": [
-    "Monday"
+    "Tuesday",
+    "Friday"
    ],
    "weekly_time": "23:00",
    "process_control": {
-    "enabled": false,
-    "close_before": [],
+    "enabled": true,
+    "close_before": [
+     "OUTLOOK.EXE"
+    ],
     "close_mode": "graceful_then_force",
-    "graceful_timeout_sec": 10,
+    "graceful_timeout_sec": 20,
     "on_close_failure": "abort",
     "restore_after": "only_if_was_running"
    },
    "retry": {
-    "enabled": false,
-    "max_attempts": 3,
-    "interval_seconds": 300,
-    "retry_on": [],
+    "enabled": true,
+    "max_attempts": 6,
+    "interval_seconds": 120,
+    "retry_on": [
+     "disk_unavailable",
+     "process_close_failed",
+     "copy_errors",
+     "source_missing"
+    ],
     "on_total_failure": []
    },
    "total_timeout_minutes": 0,
@@ -139,7 +102,7 @@
    ],
    "on_queue_overflow": "run_immediately",
    "event_debounce_seconds": 5,
-   "previous_schedule": "None",
+   "previous_schedule": "Custom",
    "trigger_mode": "schedule"
   }
  }
