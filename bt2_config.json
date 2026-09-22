@@ -15,16 +15,16 @@
    ],
    "backup_dir": "O:/",
    "skip_links": true,
-   "backup_schedule": "On file change",
-   "custom_time": "1",
+   "backup_schedule": "Weekly",
+   "custom_time": "10",
    "exclude_patterns": "~, *.tmp",
    "auto_start_backup": true,
    "enabled": true,
    "weekly_days": [
-    "Monday",
-    "Tuesday"
+    "Tuesday",
+    "Friday"
    ],
-   "weekly_time": "15:05",
+   "weekly_time": "23:00",
    "process_control": {
     "enabled": false,
     "close_before": [],
@@ -51,9 +51,10 @@
     "deleted",
     "moved"
    ],
-   "on_queue_overflow": "run_immediately",
+   "on_queue_overflow": "run_by_schedule",
    "event_debounce_seconds": 5,
-   "previous_schedule": "Weekly"
+   "previous_schedule": "Weekly",
+   "trigger_mode": "file_change"
   },
   "Outlook": {
    "source_dirs": [
@@ -98,7 +99,8 @@
    ],
    "on_queue_overflow": "run_immediately",
    "event_debounce_seconds": 5,
-   "previous_schedule": "Daily 23:00"
+   "previous_schedule": "Daily 23:00",
+   "trigger_mode": "schedule"
   },
   "Test": {
    "source_dirs": [],
@@ -137,7 +139,8 @@
    ],
    "on_queue_overflow": "run_immediately",
    "event_debounce_seconds": 5,
-   "previous_schedule": "None"
+   "previous_schedule": "None",
+   "trigger_mode": "schedule"
   }
  }
 }

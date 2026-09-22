@@ -160,9 +160,8 @@ class BackupApp:
         for pname, profile in self.settings["profiles"].items():
             if not profile.get("enabled", False):
                 continue
-            
             # Event-driven профили всегда запускаются при старте
-            if profile.get("backup_schedule") == "On file change":
+            if profile.get("trigger_mode") == "file_change":
                 self.update_log(
                     f"Initial backup for Event-driven profile '{pname}' (changes during downtime)",
                     profile_name=pname
@@ -288,27 +287,24 @@ class BackupApp:
 
     def _create_main_tab_widgets(self):
         widgets = {}
-
         # Profile Control
         ctrl_frame = ttk.LabelFrame(self.main_tab, text="Profile Control", padding=10)
         ctrl_frame.pack(fill=tk.X, pady=(0, 10))
         ctrl_inner = ttk.Frame(ctrl_frame)
         ctrl_inner.pack(fill=tk.X)
-
         widgets["enabled_var"] = tk.BooleanVar(value=False)
         ttk.Checkbutton(ctrl_inner, text="Enabled", variable=widgets["enabled_var"],
                         command=self.on_profile_enabled_changed).pack(side=tk.LEFT, padx=(0, 20))
         widgets["start_btn"] = ttk.Button(ctrl_inner, text="► Start",
-                                          command=self.start_current_profile_backup, width=12)
+                                        command=self.start_current_profile_backup, width=12)
         widgets["start_btn"].pack(side=tk.LEFT, padx=(0, 5))
         widgets["stop_btn"] = ttk.Button(ctrl_inner, text="■ Stop",
-                                         command=self.stop_current_profile_backup, width=12, state=tk.DISABLED)
+                                        command=self.stop_current_profile_backup, width=12, state=tk.DISABLED)
         widgets["stop_btn"].pack(side=tk.LEFT, padx=(0, 20))
         widgets["status_label"] = ttk.Label(ctrl_inner, text="Idle", foreground="gray")
         widgets["status_label"].pack(side=tk.LEFT, padx=(0, 20))
         widgets["monitoring_indicator"] = ttk.Label(ctrl_inner, text="Monitoring: OFF", foreground="gray")
         widgets["monitoring_indicator"].pack(side=tk.LEFT)
-
         # Source Directories
         source_frame = ttk.LabelFrame(self.main_tab, text="Source Directories", padding=10)
         source_frame.pack(fill=tk.X, pady=(0, 10))
@@ -318,7 +314,6 @@ class BackupApp:
         source_btns.pack(side=tk.RIGHT, fill=tk.Y)
         ttk.Button(source_btns, text="Add...", command=self.add_source, width=12).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(source_btns, text="Remove", command=self.remove_source, width=12).pack(fill=tk.X)
-
         # Backup Destination
         dest_frame = ttk.LabelFrame(self.main_tab, text="Backup Destination", padding=10)
         dest_frame.pack(fill=tk.X, pady=(0, 10))
@@ -327,13 +322,32 @@ class BackupApp:
         widgets["backup_entry"].grid(row=0, column=1, padx=(0, 10), sticky=tk.EW)
         ttk.Button(dest_frame, text="Browse...", command=self.browse_backup).grid(row=0, column=2)
         dest_frame.columnconfigure(1, weight=1)
-
         # Profile Settings
         settings_frame = ttk.LabelFrame(self.main_tab, text="Profile Settings", padding=10)
         settings_frame.pack(fill=tk.X, pady=(0, 10))
-
         left_col = ttk.Frame(settings_frame)
         left_col.grid(row=0, column=0, sticky=tk.NW, padx=(0, 20))
+
+        # Trigger mode (вверху левой колонки, выше skip_links)
+        trigger_mode_frame = ttk.Frame(left_col)
+        trigger_mode_frame.pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(trigger_mode_frame, text="Trigger mode:").pack(anchor=tk.W)
+        widgets["trigger_mode_var"] = tk.StringVar(value="schedule")
+        ttk.Radiobutton(
+            trigger_mode_frame,
+            text="Run by schedule",
+            variable=widgets["trigger_mode_var"],
+            value="schedule",
+            command=self._on_trigger_mode_changed
+        ).pack(anchor=tk.W, padx=(10, 0), pady=(2, 0))
+        ttk.Radiobutton(
+            trigger_mode_frame,
+            text="On file change",
+            variable=widgets["trigger_mode_var"],
+            value="file_change",
+            command=self._on_trigger_mode_changed
+        ).pack(anchor=tk.W, padx=(10, 0), pady=(2, 0))
+
         widgets["skip_links_var"] = tk.BooleanVar(value=True)
         ttk.Checkbutton(left_col, text="Skip symbolic links/junctions",
                         variable=widgets["skip_links_var"],
@@ -342,52 +356,17 @@ class BackupApp:
         ttk.Checkbutton(left_col, text="Run backup immediately on app start",
                         variable=widgets["auto_start_backup_var"],
                         command=self.save_current_profile_settings).pack(anchor=tk.W, pady=2)
-
         right_col = ttk.Frame(settings_frame)
         right_col.grid(row=0, column=1, sticky=tk.NW)
 
-        ttk.Label(right_col, text="Backup Schedule:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-        widgets["schedule_var"] = tk.StringVar(value="None")
-        widgets["schedule_menu"] = ttk.Combobox(right_col, textvariable=widgets["schedule_var"],
-                                                values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly", "On file change"],
-                                                state="readonly", width=15)
-        widgets["schedule_menu"].grid(row=0, column=1, padx=(0, 10))
-        widgets["schedule_menu"].bind("<<ComboboxSelected>>", self.schedule_changed)
-
-        widgets["custom_time_entry"] = ttk.Entry(right_col, width=10)
-        widgets["custom_time_entry"].grid(row=0, column=2, padx=(0, 10))
-        widgets["custom_time_entry"].bind("<FocusOut>", self.on_custom_time_changed)
-        widgets["custom_time_entry"].bind("<Return>", self.on_custom_time_changed)
-
-        widgets["weekly_time_entry"] = ttk.Entry(right_col, width=10)
-        widgets["weekly_time_entry"].grid(row=0, column=2, padx=(0, 10))
-        widgets["weekly_time_entry"].bind("<FocusOut>", self.on_weekly_settings_changed)
-        widgets["weekly_time_entry"].bind("<Return>", self.on_weekly_settings_changed)
-
-        widgets["custom_hint_label"] = tk.Label(right_col, text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)", fg="gray")
-        widgets["custom_hint_label"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
-        widgets["weekly_hint_label"] = tk.Label(right_col, text="Time format: HH:MM (e.g., 23:00)", fg="gray")
-        widgets["weekly_hint_label"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
-
-        widgets["weekly_days_frame"] = ttk.Frame(right_col)
-        widgets["weekly_days_frame"].grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(0, 5))
-        widgets["weekly_day_vars"] = {}
-        for day in WEEK_DAYS:
-            var = tk.BooleanVar(value=False)
-            widgets["weekly_day_vars"][day] = var
-            ttk.Checkbutton(widgets["weekly_days_frame"], text=day[:3], variable=var,
-                            command=self.on_weekly_settings_changed).pack(side=tk.LEFT, padx=(0, 5))
-
-        # Event-driven settings (показываются только при выборе "On file change")
-        widgets["event_frame"] = ttk.LabelFrame(right_col, text="Event-driven Settings", padding=5)
-        widgets["event_frame"].grid(row=3, column=0, columnspan=3, sticky=tk.EW, pady=(10, 0))
-
+        # Event-driven settings (САМЫЙ ВЕРХНИЙ в правой колонке)
+        widgets["event_frame"] = ttk.LabelFrame(right_col, text="On file change Settings", padding=5)        
+        widgets["event_frame"].grid(row=0, column=0, columnspan=3, sticky=tk.EW, pady=(0, 5))
         # Event filters
         widgets["event_created_var"] = tk.BooleanVar(value=True)
         widgets["event_modified_var"] = tk.BooleanVar(value=True)
         widgets["event_deleted_var"] = tk.BooleanVar(value=True)
         widgets["event_moved_var"] = tk.BooleanVar(value=True)
-
         ttk.Checkbutton(widgets["event_frame"], text="Create/Modify files",
                         variable=widgets["event_created_var"],
                         command=self.on_event_settings_changed).grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
@@ -397,31 +376,60 @@ class BackupApp:
         ttk.Checkbutton(widgets["event_frame"], text="Rename files",
                         variable=widgets["event_moved_var"],
                         command=self.on_event_settings_changed).grid(row=0, column=2, sticky=tk.W)
+        widgets["event_frame"].grid_remove()  # Скрыто по умолчанию
 
-        # On queue overflow
-        ttk.Label(widgets["event_frame"], text="On queue overflow:").grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        # On queue overflow (отдельный frame ВЫШЕ Backup Schedule)
+        widgets["overflow_frame"] = ttk.Frame(right_col)
+        widgets["overflow_frame"].grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=(0, 5))
+        ttk.Label(widgets["overflow_frame"], text="On queue overflow:").pack(side=tk.LEFT, padx=(0, 5))
         widgets["on_overflow_var"] = tk.StringVar(value="run_immediately")
-        widgets["on_overflow_menu"] = ttk.Combobox(widgets["event_frame"],
+        widgets["on_overflow_menu"] = ttk.Combobox(widgets["overflow_frame"],
                                                 textvariable=widgets["on_overflow_var"],
                                                 values=["run_immediately", "run_by_schedule", "log_warning"],
                                                 state="readonly", width=18)
-        widgets["on_overflow_menu"].grid(row=1, column=1, columnspan=2, sticky=tk.W, pady=(5, 0))
+        widgets["on_overflow_menu"].pack(side=tk.LEFT)
         widgets["on_overflow_menu"].bind("<<ComboboxSelected>>", self.on_event_settings_changed)
+        widgets["overflow_frame"].grid_remove()  # Скрыто по умолчанию
 
-        widgets["event_frame"].grid_remove()  # Скрыто по умолчанию
-
-        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=4, column=0, sticky=tk.W, pady=(10, 0))
+        # Backup Schedule 
+        widgets["schedule_label"] = ttk.Label(right_col, text="Backup Schedule:")
+        widgets["schedule_label"].grid(row=2, column=0, sticky=tk.W, pady=(0, 5))
+        widgets["schedule_var"] = tk.StringVar(value="None")
+        widgets["schedule_menu"] = ttk.Combobox(right_col, textvariable=widgets["schedule_var"],
+                                                values=["None", "Daily 23:00", "Daily 18:00", "Daily 10:00", "Custom", "Weekly"],
+                                                state="readonly", width=15)
+        widgets["schedule_menu"].grid(row=2, column=1, padx=(0, 10))
+        widgets["schedule_menu"].bind("<<ComboboxSelected>>", self.schedule_changed)
+        widgets["custom_time_entry"] = ttk.Entry(right_col, width=10)
+        widgets["custom_time_entry"].grid(row=2, column=2, padx=(0, 10))
+        widgets["custom_time_entry"].bind("<FocusOut>", self.on_custom_time_changed)
+        widgets["custom_time_entry"].bind("<Return>", self.on_custom_time_changed)
+        widgets["weekly_time_entry"] = ttk.Entry(right_col, width=10)
+        widgets["weekly_time_entry"].grid(row=2, column=2, padx=(0, 10))
+        widgets["weekly_time_entry"].bind("<FocusOut>", self.on_weekly_settings_changed)
+        widgets["weekly_time_entry"].bind("<Return>", self.on_weekly_settings_changed)
+        widgets["custom_hint_label"] = tk.Label(right_col, text="Examples: 21:30 (daily at 21:30), 120 (every 120 minutes)", fg="gray")
+        widgets["custom_hint_label"].grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
+        widgets["weekly_hint_label"] = tk.Label(right_col, text="Time format: HH:MM (e.g., 23:00)", fg="gray")
+        widgets["weekly_hint_label"].grid(row=3, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
+        widgets["weekly_days_frame"] = ttk.Frame(right_col)
+        widgets["weekly_days_frame"].grid(row=4, column=0, columnspan=3, sticky=tk.W, pady=(0, 5))
+        widgets["weekly_day_vars"] = {}
+        for day in WEEK_DAYS:
+            var = tk.BooleanVar(value=False)
+            widgets["weekly_day_vars"][day] = var
+            ttk.Checkbutton(widgets["weekly_days_frame"], text=day[:3], variable=var,
+                            command=self.on_weekly_settings_changed).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(right_col, text="Exclude patterns (comma-separated):").grid(row=5, column=0, sticky=tk.W, pady=(10, 0))
         widgets["exclude_entry"] = ttk.Entry(right_col, width=40)
-        widgets["exclude_entry"].grid(row=4, column=1, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        widgets["exclude_entry"].grid(row=5, column=1, columnspan=2, sticky=tk.EW, pady=(10, 0))
         widgets["exclude_hint_label"] = tk.Label(right_col, text="Masks: *$*.txt, ~$, *.tmp, logs/*", fg="gray")
-        widgets["exclude_hint_label"].grid(row=5, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
-
+        widgets["exclude_hint_label"].grid(row=6, column=1, columnspan=2, sticky=tk.W, pady=(0, 5))
         widgets["custom_time_entry"].grid_remove()
         widgets["custom_hint_label"].grid_remove()
         widgets["weekly_time_entry"].grid_remove()
         widgets["weekly_days_frame"].grid_remove()
         widgets["weekly_hint_label"].grid_remove()
-
         self.profile_widgets = widgets
 
     def _create_process_control_tab_widgets(self):
@@ -521,9 +529,22 @@ class BackupApp:
         self.current_profile_name = profile_name
         profile_data = self.settings["profiles"][profile_name]
         w = self.profile_widgets
-        
+
+        # Миграция: если backup_schedule == "On file change", переносим в trigger_mode
+        if profile_data.get("backup_schedule") == "On file change":
+            profile_data["trigger_mode"] = "file_change"
+            prev = profile_data.get("previous_schedule", "None")
+            if prev == "On file change":
+                prev = "None"
+            profile_data["backup_schedule"] = prev
+        elif "trigger_mode" not in profile_data:
+            profile_data["trigger_mode"] = "schedule"
+
+        # Устанавливаем trigger_mode
+        w["trigger_mode_var"].set(profile_data.get("trigger_mode", "schedule"))
+
         # Запускаем мониторинг для Event-driven профилей
-        if profile_data.get("backup_schedule") == "On file change" and profile_data.get("enabled", False):
+        if profile_data.get("trigger_mode") == "file_change" and profile_data.get("enabled", False):
             self._start_event_monitor(profile_name)
         else:
             self._stop_event_monitor(profile_name)
@@ -547,6 +568,17 @@ class BackupApp:
         selected_days = profile_data.get("weekly_days", ["Monday"])
         for day, var in w["weekly_day_vars"].items():
             var.set(day in selected_days)
+
+        # Event-driven settings
+        event_filters = profile_data.get("event_filters", ["created", "modified", "deleted", "moved"])
+        w["event_created_var"].set("created" in event_filters and "modified" in event_filters)
+        w["event_modified_var"].set("modified" in event_filters)
+        w["event_deleted_var"].set("deleted" in event_filters)
+        w["event_moved_var"].set("moved" in event_filters)
+        w["on_overflow_var"].set(profile_data.get("on_queue_overflow", "run_immediately"))
+
+        # Обновляем видимость и состояние полей
+        self._update_trigger_mode_state()
         self._update_schedule_visibility()
 
         # Advanced tab: Process Control
@@ -574,39 +606,96 @@ class BackupApp:
         # Total Timeout
         w["total_timeout_minutes_var"].set(str(profile_data.get("total_timeout_minutes", 0)))
 
-        # Event-driven settings
-        event_filters = profile_data.get("event_filters", ["created", "modified", "deleted", "moved"])
-        w["event_created_var"].set("created" in event_filters and "modified" in event_filters)
-        w["event_modified_var"].set("modified" in event_filters)
-        w["event_deleted_var"].set("deleted" in event_filters)
-        w["event_moved_var"].set("moved" in event_filters)
-        w["on_overflow_var"].set(profile_data.get("on_queue_overflow", "run_immediately"))
-
         self.update_profile_status(profile_name)
         self._update_custom_time_hint()
         self._refresh_log_display(profile_name)
         self._update_monitoring_indicator(profile_name)
 
+    def _on_trigger_mode_changed(self):
+        """Обработчик переключения trigger_mode (Run by schedule / On file change)."""
+        name = self.get_active_profile_name()
+        if not name:
+            return
+        self._update_trigger_mode_state()
+        self._update_schedule_visibility()
+        self.save_current_profile_settings()
+        # Управление EventMonitor
+        profile = self.settings["profiles"].get(name, {})
+        trigger_mode = self.profile_widgets["trigger_mode_var"].get()
+        if trigger_mode == "file_change" and profile.get("enabled", False):
+            self._start_event_monitor(name)
+        else:
+            self._stop_event_monitor(name)
+        self.update_profile_status(name)
+        self._update_monitoring_indicator(name)
+        self._update_tabs_state()
+
+    def _update_trigger_mode_state(self):
+        """Управляет блокировкой полей расписания в зависимости от trigger_mode и on_queue_overflow."""
+        w = self.profile_widgets
+        trigger_mode = w["trigger_mode_var"].get()
+        on_overflow = w["on_overflow_var"].get()
+        # Блокируем поля расписания, если trigger_mode == "file_change" И on_overflow != "run_by_schedule"
+        should_disable = (trigger_mode == "file_change" and on_overflow != "run_by_schedule")
+        # schedule_menu — Combobox: "disabled" или "readonly"
+        schedule_state = "disabled" if should_disable else "readonly"
+        w["schedule_menu"].config(state=schedule_state)
+        # custom_time_entry, weekly_time_entry — Entry: "disabled" или "normal"
+        entry_state = "disabled" if should_disable else "normal"
+        w["custom_time_entry"].config(state=entry_state)
+        w["weekly_time_entry"].config(state=entry_state)
+        # weekly_days_frame — блокируем все чекбоксы
+        day_state = "disabled" if should_disable else "normal"
+        for child in w["weekly_days_frame"].winfo_children():
+            child.config(state=day_state)
+
     def _update_schedule_visibility(self):
         w = self.profile_widgets
-        value = w["schedule_var"].get()
+        trigger_mode = w["trigger_mode_var"].get()
+        schedule_value = w["schedule_var"].get()
+        on_overflow = w["on_overflow_var"].get()
+
+        # Скрываем все опциональные поля
         w["custom_time_entry"].grid_remove()
         w["custom_hint_label"].grid_remove()
         w["weekly_time_entry"].grid_remove()
         w["weekly_days_frame"].grid_remove()
         w["weekly_hint_label"].grid_remove()
         w["event_frame"].grid_remove()
-        
-        if value == "Custom":
-            w["custom_time_entry"].grid()
-            w["custom_hint_label"].grid()
-        elif value == "Weekly":
-            w["weekly_time_entry"].grid()
-            w["weekly_days_frame"].grid()
-            w["weekly_hint_label"].grid()
-        elif value == "On file change":
+        w["overflow_frame"].grid_remove()
+
+        if trigger_mode == "file_change":
+            # Показываем on_queue_overflow и event_frame
+            w["overflow_frame"].grid()
             w["event_frame"].grid()
-        
+
+            # Если on_queue_overflow == "run_by_schedule", показываем Backup Schedule
+            if on_overflow == "run_by_schedule":
+                w["schedule_label"].grid()
+                w["schedule_menu"].grid()
+                if schedule_value == "Custom":
+                    w["custom_time_entry"].grid()
+                    w["custom_hint_label"].grid()
+                elif schedule_value == "Weekly":
+                    w["weekly_time_entry"].grid()
+                    w["weekly_days_frame"].grid()
+                    w["weekly_hint_label"].grid()
+            else:
+                # Скрываем Backup Schedule полностью
+                w["schedule_label"].grid_remove()
+                w["schedule_menu"].grid_remove()
+        else:
+            # Режим "Run by schedule" — показываем Backup Schedule
+            w["schedule_label"].grid()
+            w["schedule_menu"].grid()
+            if schedule_value == "Custom":
+                w["custom_time_entry"].grid()
+                w["custom_hint_label"].grid()
+            elif schedule_value == "Weekly":
+                w["weekly_time_entry"].grid()
+                w["weekly_days_frame"].grid()
+                w["weekly_hint_label"].grid()
+
         # Обновляем disabled состояние вкладок
         self._update_tabs_state()
 
@@ -639,6 +728,7 @@ class BackupApp:
         p["source_dirs"] = list(w["source_listbox"].get(0, tk.END))
         p["backup_dir"] = w["backup_entry"].get()
         p["skip_links"] = w["skip_links_var"].get()
+        p["trigger_mode"] = w["trigger_mode_var"].get()
         p["backup_schedule"] = w["schedule_var"].get()
         p["custom_time"] = w["custom_time_entry"].get()
         p["exclude_patterns"] = w["exclude_entry"].get()
@@ -663,7 +753,6 @@ class BackupApp:
             "on_total_failure": w.get("retry_on_total_failure_actions", [])
         }
         p["total_timeout_minutes"] = int(w["total_timeout_minutes_var"].get() or 0)
-
         # Event-driven settings
         event_filters = []
         if w["event_created_var"].get():
@@ -675,9 +764,8 @@ class BackupApp:
         p["event_filters"] = event_filters
         p["on_queue_overflow"] = w["on_overflow_var"].get()
         p["event_debounce_seconds"] = 5  # hardcoded, not in UI
-
-        # Update previous_schedule when switching away from "On file change"
-        if p["backup_schedule"] != "On file change":
+        # Update previous_schedule when switching away from "file_change"
+        if p["trigger_mode"] != "file_change":
             p["previous_schedule"] = p["backup_schedule"]
 
     # =========================================================
@@ -720,6 +808,7 @@ class BackupApp:
             return
         self.settings["profiles"][name] = {
             "source_dirs": [], "backup_dir": "", "skip_links": True,
+            "trigger_mode": "schedule",
             "backup_schedule": "None", "custom_time": "", "exclude_patterns": "",
             "enabled": False, "auto_start_backup": False,
             "weekly_days": ["Monday"], "weekly_time": "23:00",
@@ -816,24 +905,6 @@ class BackupApp:
         if name:
             self.stop_profile_backup(name)
 
-    def on_profile_enabled_changed(self):
-        name = self.get_active_profile_name()
-        if not name:
-            return
-        enabled = self.profile_widgets["enabled_var"].get()
-        self.settings["profiles"][name]["enabled"] = enabled
-        self.save_config()
-        self.setup_schedule()
-        self.update_profile_status(name)
-        self.update_log(f"Profile '{name}' {'enabled' if enabled else 'disabled'}",
-                        profile_name=name)
-        
-        # Управление EventMonitor
-        profile = self.settings["profiles"].get(name, {})
-        if enabled and profile.get("backup_schedule") == "On file change":
-            self._start_event_monitor(name)
-        else:
-            self._stop_event_monitor(name)
 
     def add_source(self):
         directory = filedialog.askdirectory()
@@ -1001,24 +1072,35 @@ class BackupApp:
 
     def on_event_settings_changed(self, event=None):
         self.save_current_profile_settings()
+        self._update_trigger_mode_state()
+        self._update_schedule_visibility()
         name = self.get_active_profile_name()
         if name:
             self._restart_event_monitor(name)
+
+    def on_profile_enabled_changed(self):
+        name = self.get_active_profile_name()
+        if not name:
+            return
+        enabled = self.profile_widgets["enabled_var"].get()
+        self.settings["profiles"][name]["enabled"] = enabled
+        self.save_config()
+        self.setup_schedule()
+        self.update_profile_status(name)
+        self.update_log(f"Profile '{name}' {'enabled' if enabled else 'disabled'}",
+                        profile_name=name)
+        # Управление EventMonitor
+        profile = self.settings["profiles"].get(name, {})
+        if enabled and profile.get("trigger_mode") == "file_change":
+            self._start_event_monitor(name)
+        else:
+            self._stop_event_monitor(name)
 
     def schedule_changed(self, event=None):
         self._update_schedule_visibility()
         self.save_current_profile_settings()
         self.setup_schedule()
         self.update_tray_menu()
-        
-        # Управление EventMonitor
-        name = self.get_active_profile_name()
-        if name:
-            profile = self.settings["profiles"].get(name, {})
-            if profile.get("backup_schedule") == "On file change":
-                self._start_event_monitor(name)
-            else:
-                self._stop_event_monitor(name)
 
     # =========================================================
     # ============= PREFERENCES & ABOUT DIALOGS ===============
@@ -1208,12 +1290,12 @@ class BackupApp:
         if text is None:
             state = self.profile_state.get(profile_name, {})
             enabled = self.settings["profiles"].get(profile_name, {}).get("enabled", False)
-            schedule = self.settings["profiles"].get(profile_name, {}).get("backup_schedule", "None")
+            trigger_mode = self.settings["profiles"].get(profile_name, {}).get("trigger_mode", "schedule")
             if state.get("running", False):
                 text, color = "Running...", "orange"
             elif not enabled:
                 text, color = "Disabled", "gray"
-            elif schedule == "On file change":
+            elif trigger_mode == "file_change":
                 text, color = "Idle (event-driven)", "green"
             else:
                 text, color = "Idle (scheduled)", "blue"
@@ -1473,7 +1555,7 @@ class BackupApp:
                     stats = backup_changed_files(
                         source_dirs, backup_dir, skip_links, exclude_patterns_str,
                         source_dirs, state, events,
-                        log=lambda m: self.update_log(m, profile_name=profile_name),
+                        log=lambda m: self.root.after(0, lambda: self.update_log(m, profile_name=profile_name)),
                     )
                     for key in ["files_copied", "files_skipped", "total_size_mb", "errors"]:
                         total_stats[key] += stats.get(key, 0)
@@ -1505,7 +1587,7 @@ class BackupApp:
                         stats = backup_saves(
                             source_dir, backup_dir, skip_links, exclude_patterns_str,
                             source_dirs, state,
-                            log=lambda m: self.update_log(m, profile_name=profile_name),
+                            log=lambda m: self.root.after(0, lambda: self.update_log(m, profile_name=profile_name)),
                         )
                         for key in total_stats:
                             total_stats[key] += stats.get(key, 0)
@@ -1853,13 +1935,13 @@ class BackupApp:
             else:
                 w["weekly_hint_label"].config(text=err, fg="red")
 
+
     def _update_tabs_state(self):
-        """Делает вкладки Process Control и Retry Settings disabled при выборе 'On file change'."""
+        """Делает вкладки Process Control и Retry Settings disabled при trigger_mode == 'file_change'."""
         if not self.current_profile_name:
             return
         profile = self.settings["profiles"].get(self.current_profile_name, {})
-        is_event_driven = profile.get("backup_schedule") == "On file change"
-        
+        is_event_driven = profile.get("trigger_mode") == "file_change"
         try:
             if is_event_driven:
                 self.profile_notebook.tab(self.process_control_tab, state='disabled')
@@ -1868,7 +1950,6 @@ class BackupApp:
                 self.profile_notebook.tab(self.process_control_tab, state='normal')
                 self.profile_notebook.tab(self.retry_settings_tab, state='normal')
         except tk.TclError:
-            # Если state='disabled' не поддерживается, используем fallback
             pass
 
     def _update_monitoring_indicator(self, profile_name):
@@ -1878,12 +1959,10 @@ class BackupApp:
         w = self.profile_widgets
         if "monitoring_indicator" not in w:
             return
-        
         profile = self.settings["profiles"].get(profile_name, {})
-        is_event_driven = profile.get("backup_schedule") == "On file change"
+        is_event_driven = profile.get("trigger_mode") == "file_change"
         is_enabled = profile.get("enabled", False)
         is_monitoring = is_event_driven and is_enabled and profile_name in self.event_monitors
-        
         if is_monitoring:
             w["monitoring_indicator"].config(text="Monitoring: ON", foreground="green")
         else:
@@ -1894,33 +1973,32 @@ class BackupApp:
         profile = self.settings["profiles"].get(profile_name, {})
         if not profile.get("enabled", False):
             return
-        if profile.get("backup_schedule") != "On file change":
+        if profile.get("trigger_mode") != "file_change":
             return
-        
         source_dirs = profile.get("source_dirs", [])
         if not source_dirs:
             return
-        
         # Останавливаем предыдущий монитор, если был
         self._stop_event_monitor(profile_name)
-        
         event_filters = profile.get("event_filters", ["created", "modified", "deleted", "moved"])
         on_overflow = profile.get("on_queue_overflow", "run_immediately")
         debounce_seconds = profile.get("event_debounce_seconds", 5)
-        
         def backup_callback(pname, events=None, overflow=False):
             """Callback для запуска бэкапа из EventMonitor."""
             self.root.after(0, lambda: self._event_triggered_backup(pname, events, overflow))
-        
         def log_callback(message):
             """Callback для логирования из EventMonitor."""
-            self.update_log(message, profile_name=profile_name)
-        
+            self.root.after(0, lambda: self.update_log(message, profile_name=profile_name))
         monitor = EventMonitor(profile_name, backup_callback, log_callback)
         monitor.start(source_dirs, event_filters, on_overflow, debounce_seconds)
         self.event_monitors[profile_name] = monitor
-        
         self._update_monitoring_indicator(profile_name)
+
+    def _restart_event_monitor(self, profile_name):
+        """Перезапускает EventMonitor (при изменении source_dirs или фильтров)."""
+        profile = self.settings["profiles"].get(profile_name, {})
+        if profile.get("trigger_mode") == "file_change" and profile.get("enabled", False):
+            self._start_event_monitor(profile_name)
 
     def _stop_event_monitor(self, profile_name):
         """Останавливает EventMonitor для профиля."""
@@ -1932,12 +2010,6 @@ class BackupApp:
             del self.event_monitors[profile_name]
         
         self._update_monitoring_indicator(profile_name)
-
-    def _restart_event_monitor(self, profile_name):
-        """Перезапускает EventMonitor (при изменении source_dirs или фильтров)."""
-        profile = self.settings["profiles"].get(profile_name, {})
-        if profile.get("backup_schedule") == "On file change" and profile.get("enabled", False):
-            self._start_event_monitor(profile_name)
 
     def _event_triggered_backup(self, profile_name, events=None, overflow=False):
         """Запускает бэкап, триггернутый событием файловой системы."""
@@ -2124,6 +2196,15 @@ class BackupApp:
                 pdata.setdefault("on_queue_overflow", "run_immediately")
                 pdata.setdefault("event_debounce_seconds", 5)
                 pdata.setdefault("previous_schedule", "None")
+                # Migration: if backup_schedule == "On file change", migrate to trigger_mode
+                if pdata.get("backup_schedule") == "On file change":
+                    pdata["trigger_mode"] = "file_change"
+                    prev = pdata.get("previous_schedule", "None")
+                    if prev == "On file change":
+                        prev = "None"
+                    pdata["backup_schedule"] = prev
+                else:
+                    pdata.setdefault("trigger_mode", "schedule")
 
         if "errors_last_read_pos" not in self.settings["global"]:
             self.settings["global"]["errors_last_read_pos"] = 0
