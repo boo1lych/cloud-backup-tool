@@ -1942,14 +1942,18 @@ class BackupApp:
     def _event_triggered_backup(self, profile_name, events=None, overflow=False):
         """Запускает бэкап, триггернутый событием файловой системы."""
         profile = self.settings["profiles"].get(profile_name, {})
+        
         # Если overflow=True и on_queue_overflow == "run_by_schedule"
         if overflow and profile.get("on_queue_overflow") == "run_by_schedule":
-            previous_schedule = profile.get("previous_schedule", "None")
+            overflow_schedule = profile.get("overflow_schedule", "None")
             self.update_log(
-                f"[{profile_name}] Queue overflow — will run by previous schedule: {previous_schedule}",
+                f"[{profile_name}] Queue overflow — will run by overflow schedule: {overflow_schedule}",
                 profile_name=profile_name
             )
+            # Запускаем полный бэкап (без events)
+            self.start_profile_backup(profile_name, show_dialog=False, events=None)
             return
+        
         self.update_log(
             f"[{profile_name}] Backup triggered by file change",
             profile_name=profile_name
