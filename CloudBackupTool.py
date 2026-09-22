@@ -729,8 +729,11 @@ class BackupApp:
         p["backup_dir"] = w["backup_entry"].get()
         p["skip_links"] = w["skip_links_var"].get()
         p["trigger_mode"] = w["trigger_mode_var"].get()
-        p["backup_schedule"] = w["schedule_var"].get()
-        p["custom_time"] = w["custom_time_entry"].get()
+        schedule_value = w["schedule_var"].get()
+        p["backup_schedule"] = schedule_value
+        if schedule_value == "Custom":
+            p["custom_time"] = w["custom_time_entry"].get()
+        # Иначе не трогаем custom_time — оставляем как есть или не сохраняем
         p["exclude_patterns"] = w["exclude_entry"].get()
         p["enabled"] = w["enabled_var"].get()
         p["auto_start_backup"] = w["auto_start_backup_var"].get()

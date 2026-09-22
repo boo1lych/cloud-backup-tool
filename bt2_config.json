@@ -3,7 +3,7 @@
   "autorun": false,
   "start_minimized": false,
   "log_to_file": true,
-  "active_profile": "Default",
+  "active_profile": "Outlook",
   "theme": "light",
   "errors_last_read_pos": 8572,
   "profiles_collapsed": false
@@ -24,7 +24,7 @@
     "Tuesday",
     "Friday"
    ],
-   "weekly_time": "23:00",
+   "weekly_time": "21:00",
    "process_control": {
     "enabled": false,
     "close_before": [],
@@ -62,8 +62,8 @@
    ],
    "backup_dir": "O:/",
    "skip_links": true,
-   "backup_schedule": "Daily 23:00",
-   "custom_time": "",
+   "backup_schedule": "Custom",
+   "custom_time": "23:00",
    "exclude_patterns": "~, *.tmp",
    "enabled": false,
    "auto_start_backup": false,
@@ -99,7 +99,7 @@
    ],
    "on_queue_overflow": "run_immediately",
    "event_debounce_seconds": 5,
-   "previous_schedule": "Daily 23:00",
+   "previous_schedule": "Custom",
    "trigger_mode": "schedule"
   },
   "Test": {
