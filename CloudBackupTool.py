@@ -1254,7 +1254,7 @@ class BackupApp:
         ttk.Button(btn_frame, text="OK", command=on_ok, width=10).pack(side=tk.RIGHT)
 
     def open_about(self):
-        messagebox.showinfo("About", "Cloud Backup Tool\nVersion 3.2.2\n\nBackup utility for cloud storage")
+        messagebox.showinfo("About", "Cloud Backup Tool\nVersion 3.3.1\n\nBackup utility for cloud storage")
 
     def _toggle_autorun_from_menu(self):
         self.set_autorun(self.prefs_autorun_var.get())
