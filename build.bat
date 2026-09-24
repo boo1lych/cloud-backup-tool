@@ -88,20 +88,20 @@ echo %GREEN%✅ Все проверки пройдены%RESET%
 echo.
 :: === 2.5. Проверка Python и зависимостей ===
 echo %YELLOW%🐍 Проверка Python и зависимостей...%RESET%
-:: Приоритет: venv314 > системный python
-if exist "venv314\Scripts\python.exe" (
-set "PYTHON=venv314\Scripts\python.exe"
-echo   ✅ Используем venv314
+:: Приоритет: .venv > системный python
+if exist ".venv\Scripts\python.exe" (
+set "PYTHON=.venv\Scripts\python.exe"
+echo   ✅ Используем .venv
 ) else (
 set "PYTHON=python"
 where python >nul 2>nul
 if !ERRORLEVEL! neq 0 (
 echo %RED%❌ Ошибка: python не найден в PATH%RESET%
 echo %YELLOW%💡 Установите Python 3.8+ и добавьте его в PATH%RESET%
-echo %YELLOW%💡 Или создайте venv: py -3.14 -m venv venv314%RESET%
+echo %YELLOW%💡 Или создайте venv: py -3.14 -m venv .venv%RESET%
 goto :pause_exit
 )
-echo   ℹ️  venv314 не найден, используем системный python
+echo   ℹ️  .venv не найден, используем системный python
 )
 !PYTHON! -c "import schedule, pystray, PIL, sv_ttk, PyInstaller, psutil, requests, watchdog" >nul 2>nul
 if !ERRORLEVEL! neq 0 (
