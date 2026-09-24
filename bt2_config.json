@@ -3,7 +3,7 @@
   "autorun": false,
   "start_minimized": false,
   "log_to_file": true,
-  "active_profile": "Outlook",
+  "active_profile": "Default",
   "theme": "light",
   "errors_last_read_pos": 1353,
   "profiles_collapsed": false
@@ -11,15 +11,17 @@
  "profiles": {
   "Default": {
    "source_dirs": [
-    "C:/Users/aantonov/Documents/aantonov-documents"
+    "C:/Users/boolych/Saved Games",
+    "C:/Users/boolych/Documents/My Games",
+    "C:/Users/boolych/AppData/Local/Stalker2/Saved"
    ],
-   "backup_dir": "O:/",
+   "backup_dir": "Z:/Backup/GameSaves",
    "skip_links": true,
-   "backup_schedule": "Weekly",
+   "backup_schedule": "Daily 23:00",
    "custom_time": "10",
    "exclude_patterns": "~$, *.tmp",
-   "auto_start_backup": true,
-   "enabled": true,
+   "auto_start_backup": false,
+   "enabled": false,
    "weekly_days": [
     "Monday"
    ],
@@ -52,57 +54,7 @@
    ],
    "on_queue_overflow": "run_immediately",
    "event_debounce_seconds": 5,
-   "previous_schedule": "Custom",
-   "trigger_mode": "file_change"
-  },
-  "Outlook": {
-   "source_dirs": [
-    "C:/Users/aantonov/Documents/Файлы Outlook"
-   ],
-   "backup_dir": "O:/",
-   "skip_links": true,
-   "backup_schedule": "Custom",
-   "custom_time": "23:00",
-   "exclude_patterns": "~, *.tmp",
-   "enabled": true,
-   "auto_start_backup": false,
-   "weekly_days": [
-    "Tuesday",
-    "Friday"
-   ],
-   "weekly_time": "23:00",
-   "process_control": {
-    "enabled": true,
-    "close_before": [
-     "OUTLOOK.EXE"
-    ],
-    "close_mode": "graceful_then_force",
-    "graceful_timeout_sec": 20,
-    "on_close_failure": "abort",
-    "restore_after": "only_if_was_running"
-   },
-   "retry": {
-    "enabled": true,
-    "max_attempts": 6,
-    "interval_seconds": 120,
-    "retry_on": [
-     "disk_unavailable",
-     "process_close_failed",
-     "copy_errors",
-     "source_missing"
-    ],
-    "on_total_failure": []
-   },
-   "total_timeout_minutes": 0,
-   "event_filters": [
-    "created",
-    "modified",
-    "deleted",
-    "moved"
-   ],
-   "on_queue_overflow": "run_immediately",
-   "event_debounce_seconds": 5,
-   "previous_schedule": "Custom",
+   "previous_schedule": "Daily 23:00",
    "trigger_mode": "schedule"
   }
  }
